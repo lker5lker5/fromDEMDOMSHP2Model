@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Webapp runtime
+webapp/sessions/*
+
+# OS
+.DS_Store

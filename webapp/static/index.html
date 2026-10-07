@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>基于Cesium 3D地形的分布范围展示 (Cesium版)</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.140.0/Build/Cesium/Widgets/widgets.css">
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- Cesium CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.140.0/Build/Cesium/Cesium.js"></script>
+</head>
+<body>
+
+  <!-- ====== 顶部栏 ====== -->
+  <header id="topbar">
+    <div>
+      <span id="app-title">🌍 基于Cesium 3D 的分布可视化</span>
+      <span id="app-version">v2.0-cesium</span>
+    </div>
+    <button id="help-btn">❓ 使用帮助</button>
+  </header>
+
+  <!-- ====== 错误横幅 ====== -->
+  <div id="error-banner" class="hidden"></div>
+
+  <!-- ====== 主区域 ====== -->
+  <main id="main-content">
+
+    <!-- ====== 左侧操作与参数面板 ====== -->
+    <aside id="param-panel">
+
+      <!-- 1. 上传数据 -->
+      <div class="section" id="section-upload">
+        <div class="section-title">📤 1. 上传数据</div>
+        <div id="upload-area">
+          <div class="file-row">
+            <label for="dem-input" class="file-label file-label-dem">📡 DEM</label>
+            <span class="file-name" id="dem-filename">未选择</span>
+            <input type="file" id="dem-input" accept=".tif,.tiff" hidden>
+          </div>
+          <div class="file-row">
+            <label for="dom-input" class="file-label file-label-dom">🛰 DOM</label>
+            <span class="file-name" id="dom-filename">未选择</span>
+            <input type="file" id="dom-input" accept=".tif,.tiff" hidden>
+          </div>
+          <div class="file-row">
+            <label for="shp-input" class="file-label file-label-shp">📐 SHP</label>
+            <span class="file-name" id="shp-filename">未选择</span>
+            <input type="file" id="shp-input" accept=".zip" hidden>
+          </div>
+          <!-- SHP 字段勾选区（选中 SHP 后立即展示） -->
+          <div id="fields-container" class="hidden">
+            <div style="font-size:13px;font-weight:600;margin:8px 0 4px;">SHP 字段展示</div>
+            <div id="fields-list"></div>
+            <div id="field-check-count" class="field-check-count hidden"></div>
+            <div id="field-check-warn" class="field-check-warn hidden"></div>
+          </div>
+          <button id="upload-start-btn" style="display:none;">▶ 开始处理</button>
+          <span id="status-text" class="status-idle"></span>
+          <div id="processing-timer" class="processing-timer hidden"></div>
+        </div>
+      </div>
+
+      <!-- 2. 数据处理 -->
+      <div class="section" id="section-data">
+        <div class="section-title">🔧 2. 数据处理</div>
+        <div id="diag-panel">
+          <div class="diag-empty">请先上传数据</div>
+        </div>
+      </div>
+
+      <!-- 3. 制图参数 -->
+      <div class="section" id="section-params">
+        <div class="section-title">🎨 3. 制图参数</div>
+        <div class="param-group">
+
+          <!-- 3.1 标题 -->
+          <details open>
+            <summary>📝 标题</summary>
+            <div class="param-body">
+              <div class="param-row">
+                <label for="param-title">标题文字</label>
+                <input type="text" id="param-title" value="xx分布示意图">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>标题字号</span>
+                  <span class="param-val" id="val-title_fontsize">16</span>
+                </label>
+                <input type="range" id="param-title_fontsize" min="10" max="24" step="1" value="16">
+              </div>
+              <div class="param-row">
+                <label for="param-title_font">选择字体</label>
+                <select id="param-title_font">
+                  <option value="SimSun, Times New Roman, serif">宋体 (SimSun)</option>
+                  <option value="SimHei, Times New Roman, sans-serif">黑体 (SimHei)</option>
+                  <option value="Microsoft YaHei, Times New Roman, sans-serif" selected>微软雅黑 (Microsoft YaHei)</option>
+                  <option value="KaiTi, Times New Roman, serif">楷体 (KaiTi)</option>
+                  <option value="FangSong, Times New Roman, serif">仿宋 (FangSong)</option>
+                  <option value="STSong, Times New Roman, serif">华文宋体 (STSong)</option>
+                </select>
+              </div>
+            </div>
+          </details>
+
+          <!-- 3.2 地形 -->
+          <details open>
+            <summary>🏔 地形</summary>
+            <div class="param-body">
+              <div class="param-row">
+                <label>
+                  <span>垂直夸张</span>
+                  <span class="param-val" id="val-vert_exag">0.8</span>
+                </label>
+                <input type="range" id="param-vert_exag" min="0.1" max="3.0" step="0.1" value="0.8">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>Z 轴视觉夸张</span>
+                  <span class="param-val" id="val-z_exag_visual">1.2</span>
+                </label>
+                <input type="range" id="param-z_exag_visual" min="0.5" max="3.0" step="0.1" value="1.2">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>最大渲染尺寸</span>
+                  <span class="param-val" id="val-max_size">600</span>
+                </label>
+                <input type="range" id="param-max_size" min="200" max="1200" step="100" value="600">
+                <div class="param-hint">数值越大越慢</div>
+              </div>
+            </div>
+          </details>
+
+          <!-- 3.3 光照 -->
+          <details open>
+            <summary>☀️ 光照</summary>
+            <div class="param-body">
+              <div class="param-row">
+                <label>
+                  <span>方位角</span>
+                  <span class="param-val" id="val-azdeg">315</span>
+                </label>
+                <input type="range" id="param-azdeg" min="0" max="360" step="5" value="315">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>高度角</span>
+                  <span class="param-val" id="val-altdeg">45</span>
+                </label>
+                <input type="range" id="param-altdeg" min="5" max="90" step="5" value="45">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>阴影混合比</span>
+                  <span class="param-val" id="val-hillshade_mix">0.45</span>
+                </label>
+                <input type="range" id="param-hillshade_mix" min="0" max="1.0" step="0.05" value="0.45">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>纹理亮度（gamma 校正）</span>
+                  <span class="param-val" id="val-texture_brightness">1.0</span>
+                </label>
+                <input type="range" id="param-texture_brightness" min="0.2" max="3.0" step="0.05" value="1.0">
+                <div class="param-hint">gamma 校正 &gt;1.0 暗部提亮明显，亮部不过曝；&lt;1.0 暗部压暗</div>
+              </div>
+              <div class="param-row">
+                <label style="font-weight:600;color:var(--text);margin-top:8px;">🎨 颜色遮罩</label>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+                  <input type="color" id="param-color_mask" value="#1a73e8" style="width:48px;height:32px;border:1px solid var(--border);border-radius:4px;cursor:pointer;padding:2px;flex-shrink:0;">
+                  <button id="color-mask-clear-btn" style="padding:3px 12px;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer;font-size:11px;">清除</button>
+                </div>
+                <div style="margin-top:6px;">
+                  <label>
+                    <span>遮罩强度</span>
+                    <span class="param-val" id="val-color_mask_strength">0.0</span>
+                  </label>
+                  <input type="range" id="param-color_mask_strength" min="0" max="1.0" step="0.05" value="0.0">
+                  <div class="param-hint">叠加颜色到地形上，调整整体色调（先选色，再调强度）</div>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <!-- 3.4 视角 -->
+          <details open>
+            <summary>👁 视角</summary>
+            <div class="param-body">
+              <div class="param-row">
+                <label>
+                  <span>俯仰角</span>
+                  <span class="param-val" id="val-view_elev">58</span>
+                </label>
+                <input type="range" id="param-view_elev" min="0" max="89" step="1" value="58">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>方位角</span>
+                  <span class="param-val" id="val-view_azim">-55</span>
+                </label>
+                <input type="range" id="param-view_azim" min="-180" max="180" step="5" value="-55">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>视距</span>
+                  <span class="param-val" id="val-view_distance">2.5</span>
+                </label>
+                <input type="range" id="param-view_distance" min="1.5" max="4.0" step="0.1" value="2.5">
+              </div>
+              <div class="param-row">
+                <label style="margin-bottom:6px;font-weight:600;">快捷视角</label>
+                <div class="view-quick-btns">
+                  <button class="view-quick-btn" data-elev="85" data-azim="-55">俯视</button>
+                  <button class="view-quick-btn" data-elev="58" data-azim="-55">斜视</button>
+                  <button class="view-quick-btn" data-elev="20" data-azim="-55">侧视</button>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <!-- 3.5 坐标轴 -->
+          <details open>
+            <summary>📐 坐标轴</summary>
+            <div class="param-body">
+              <div class="param-row">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="param-show_axes" checked>
+                  显示坐标轴（刻度与标注）
+                </label>
+              </div>
+              <div class="param-row">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="param-show_grid">
+                  显示网格线
+                </label>
+              </div>
+            </div>
+          </details>
+
+          <!-- 3.6 样式 -->
+          <details open>
+            <summary>🎨 样式</summary>
+            <div class="param-body">
+              <div class="param-row">
+                <label for="param-line_color">边界线颜色</label>
+                <input type="color" id="param-line_color" value="#FFD700">
+              </div>
+              <div class="param-row">
+                <label for="param-label_color">标注颜色</label>
+                <input type="color" id="param-label_color" value="#E8E8E8">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>边界线宽</span>
+                  <span class="param-val" id="val-line_width">2.2</span>
+                </label>
+                <input type="range" id="param-line_width" min="0.5" max="6.0" step="0.1" value="2.2">
+              </div>
+              <div class="param-row">
+                <label for="param-nodata_color">NoData 填充色</label>
+                <input type="color" id="param-nodata_color" value="#BFBFBF">
+              </div>
+              <div class="param-row">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="param-show_labels" checked>
+                  显示质心标注
+                </label>
+              </div>
+              <div class="param-row">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="param-show_centroids" checked>
+                  显示质心圆点
+                </label>
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>标注字号</span>
+                  <span class="param-val" id="val-label_fontsize">11</span>
+                </label>
+                <input type="range" id="param-label_fontsize" min="8" max="20" step="1" value="11">
+              </div>
+              <div class="param-row">
+                <label>
+                  <span>圆点大小</span>
+                  <span class="param-val" id="val-centroid_size">7</span>
+                </label>
+                <input type="range" id="param-centroid_size" min="3" max="20" step="1" value="7">
+              </div>
+            </div>
+          </details>
+
+        </div>
+      </div>
+
+      <!-- 底部按钮 -->
+      <div class="action-btns">
+        <button id="apply-btn" class="btn-primary">✅ 应用</button>
+        <button id="reset-btn" class="btn-secondary">↺ 重置</button>
+      </div>
+
+    </aside>
+
+    <!-- ====== 右侧结果区 ====== -->
+    <section id="view-area">
+      <div id="plotly-container">
+        <div id="plotly-div"></div>
+        <div id="cesium-map" class="map-container"></div>
+        <div id="upload-placeholder" class="placeholder">
+          <p>🌏 默认显示 Cesium 全球卫星影像 — 浙江省范围</p>
+          <p>上传 DEM、DOM 和 SHP 后切换为 3D 视图</p>
+        </div>
+      </div>
+
+      <!-- 下载区 -->
+      <div id="download-area" class="hidden">
+        <label for="resolution-select">分辨率:</label>
+        <select id="resolution-select">
+          <option value="1280,960">1280×960（屏幕）</option>
+          <option value="1920,1440" selected>1920×1440（报告）</option>
+          <option value="2560,1920">2560×1920（高清）</option>
+          <option value="3840,2880">3840×2880（出版）</option>
+          <option value="custom">自定义</option>
+        </select>
+        <div id="custom-resolution" class="hidden">
+          <input type="number" id="custom-width" placeholder="宽" min="100" value="1920">
+          <span>×</span>
+          <input type="number" id="custom-height" placeholder="高" min="100" value="1440">
+        </div>
+
+        <label for="dpi-select">DPI:</label>
+        <select id="dpi-select">
+          <option value="72">72</option>
+          <option value="150">150</option>
+          <option value="300" selected>300</option>
+          <option value="600">600</option>
+        </select>
+
+        <button id="download-png-btn" class="download-btn download-btn-png">⬇ 下载 PNG</button>
+        <button id="download-html-btn" class="download-btn download-btn-html">⬇ 下载 HTML</button>
+      </div>
+
+      <!-- 运行日志 -->
+      <div id="log-panel">
+        <div id="log-header">📋 运行日志</div>
+        <div id="log-body">
+          <div class="log-entry log-info"><span class="log-time">启动</span> 应用已初始化，等待上传数据</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ====== 加载状态 ====== -->
+  <div id="loading-overlay" class="hidden">
+    <div class="spinner"></div>
+    <p id="loading-text">处理中...</p>
+  </div>
+
+  <!-- ====== 属性信息弹窗（自定义覆盖层） ====== -->
+  <div id="info-popup" class="hidden">
+    <div id="info-popup-inner">
+      <div id="info-popup-header">
+        <span id="info-popup-title">📋 属性信息</span>
+        <button id="info-popup-close" title="关闭 (Esc)">✕</button>
+      </div>
+      <div id="info-popup-body"></div>
+    </div>
+  </div>
+
+  <!-- ====== 帮助弹窗 ====== -->
+  <div id="help-overlay" class="hidden">
+    <div id="help-modal">
+      <h3>📖 使用说明</h3>
+      <p><strong>地灾单点制图 Web 应用 (Cesium版)</strong> — 上传 DEM/DOM/SHP 数据，生成交互式 3D 地形与灾害边界叠加图。</p>
+      <ul>
+        <li><strong>上传数据</strong>：分别选择 DEM(.tif)、DOM(.tif) 和 SHP(.zip) 文件，勾选要展示的字段后点「开始处理」</li>
+        <li><strong>参数调整</strong>：在左侧面板调整标题、地形、光照、视角、样式等参数</li>
+        <li><strong>应用</strong>：修改参数后点「应用」或按 <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 刷新 3D 视图</li>
+        <li><strong>重置</strong>：恢复上传时的默认参数</li>
+        <li><strong>SHP 字段</strong>：选择 SHP 文件后，在文件选择器下方勾选要展示的属性字段，再点「开始处理」</li>
+        <li><strong>下载 PNG</strong>：选择分辨率和 DPI 后下载静态图片</li>
+        <li><strong>下载 HTML</strong>：下载可离线打开的交互式 3D 文件</li>
+        <li><strong>交互操作</strong>：鼠标拖拽旋转、滚轮缩放、右键平移</li>
+      </ul>
+      <button id="help-close-btn">知道了</button>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
