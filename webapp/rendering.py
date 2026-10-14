@@ -76,7 +76,7 @@ def get_aspect_ratio(xs, ys, Z, z_exag_visual: float = None):
 # ==================== Figure 生成 ====================
 
 def _build_surface_trace(data: dict, params: dict) -> go.Surface:
-    """构建地形 Surface trace。"""
+    """构建地形 Surface trace（保留用于快速回退）。"""
     X = data["X"]
     Y = data["Y"]
     Z = data["Z"]
@@ -116,6 +116,90 @@ def _build_surface_trace(data: dict, params: dict) -> go.Surface:
         hoverinfo="skip",
     )
     return trace
+
+
+# Mesh3d 网格目标分辨率（每维度最多顶点数，平衡画质与 JSON 体积）
+_MESH_TARGET = 250
+
+
+def _build_mesh_trace(data: dict, params: dict) -> go.Mesh3d:
+    """
+    构建地形 Mesh3d trace，使用 vertexcolor（逐顶点 DOM RGB）替代
+    Surface 的单通道 surfacecolor + colorscale 近似。
+
+    每个顶点直接从增强后的 DOM 获取真实 RGB 颜色，
+    保留植被绿、裸土棕、建筑灰等空间纹理差异。
+    """
+    X = data["X"]
+    Y = data["Y"]
+    Z = data["Z"]
+    enhanced_dom = data.get("enhanced_dom")   # (H, W, 3) float [0,1]
+    hillshade = data.get("hillshade")          # (H, W) float [0,1]
+
+    # --- 1. 降采样 ---
+    H, W = X.shape
+    stride = max(1, max(H, W) // _MESH_TARGET)
+    xs_sub = X[::stride, ::stride].ravel()
+    ys_sub = Y[::stride, ::stride].ravel()
+    zs_sub = Z[::stride, ::stride].ravel()
+    H_sub = (H + stride - 1) // stride
+    W_sub = (W + stride - 1) // stride
+
+    # --- 2. 构建 vertexcolor ---
+    if enhanced_dom is not None and enhanced_dom.size > 0:
+        rgb_sub = enhanced_dom[::stride, ::stride].reshape(-1, 3)
+
+        # 可选：烘焙 hillshade（通过 hillshade_mix 控制强度）
+        mix = params.get("hillshade_mix", 0.0)
+        if hillshade is not None and mix > 0:
+            hs_sub = hillshade[::stride, ::stride].ravel()
+            shade = 1.0 - mix + mix * hs_sub
+            rgb_sub = np.clip(rgb_sub * shade[:, np.newaxis], 0, 1)
+
+        # float [0,1] → int [0,255] → rgb 字符串
+        rgb_int = (rgb_sub * 255).astype(np.uint8)
+        vertexcolor = [f'rgb({r},{g},{b})' for r, g, b in rgb_int]
+    else:
+        vertexcolor = 'rgb(128,128,128)'
+
+    # --- 3. 构建三角形索引（每个 quad → 2 个 triangle）---
+    i_list, j_list, k_list = [], [], []
+    for r in range(H_sub - 1):
+        for c in range(W_sub - 1):
+            a = r * W_sub + c
+            b = a + 1
+            d = a + W_sub
+            e = d + 1
+            # triangle 1: a-b-e, triangle 2: a-e-d
+            i_list.extend([a, a])
+            j_list.extend([b, e])
+            k_list.extend([e, d])
+
+    # --- 4. 构建 trace ---
+    return go.Mesh3d(
+        x=xs_sub,
+        y=ys_sub,
+        z=zs_sub,
+        i=i_list,
+        j=j_list,
+        k=k_list,
+        vertexcolor=vertexcolor,
+        lighting={
+            "ambient": 0.45,
+            "diffuse": 0.85,
+            "specular": 0.08,
+            "roughness": 0.6,
+            "fresnel": 0.1,
+        },
+        lightposition={
+            "x": float(X.mean() + (X.max() - X.min()) * 0.5),
+            "y": float(Y.mean() + (Y.max() - Y.min()) * 0.5),
+            "z": float(np.nanmax(Z) * 3) if not np.all(np.isnan(Z)) else 100,
+        },
+        hoverinfo="skip",
+        showscale=False,
+        name="terrain",
+    )
 
 
 def _build_boundary_traces(zones: list, params: dict) -> list[go.Scatter3d]:
@@ -249,7 +333,7 @@ def create_plotly_figure(data: dict, params: dict, zones: list = None,
 
     # --- 构建 traces ---
     traces = []
-    traces.append(_build_surface_trace(data, params))
+    traces.append(_build_mesh_trace(data, params))
     traces.extend(_build_boundary_traces(zones, params))
     traces.extend(_build_centroid_traces(zones, params, z_min, display_fields))
 

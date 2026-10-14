@@ -1132,7 +1132,18 @@ def recompute_with_params(cached: dict, params: dict) -> dict:
     colorscale = build_terrain_colorscale(dom_rgb, color_mask=color_mask,
                                           color_mask_strength=color_mask_strength)
 
+    # 计算增强后的 DOM（供 Mesh3d vertexcolor 使用）
+    enhanced_dom = enhance_dom_for_preview(dom_rgb, texture_brightness)
+    if color_mask and color_mask_strength > 0:
+        mr, mg, mb = hex_to_rgb(color_mask)
+        mask_rgb = np.array([mr, mg, mb], dtype=np.float32) / 255.0
+        ms = max(0.0, min(1.0, color_mask_strength))
+        enhanced_dom = enhanced_dom * (1 - ms) + mask_rgb * ms
+        enhanced_dom = np.clip(enhanced_dom, 0, 1)
+
     result = dict(cached)
     result["intensity"] = intensity
     result["colorscale"] = colorscale
+    result["hillshade"] = hillshade
+    result["enhanced_dom"] = enhanced_dom
     return result
