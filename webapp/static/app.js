@@ -23,6 +23,13 @@
     demFile: null,
     domFile: null,
     shpFile: null,
+    // 标注模式
+    annotations: [],          // [{id, type, x, y, z, label, color, points, distance}]
+    annotationMode: false,
+    annotationTool: 'point',  // 'point' | 'line' | 'measure' | 'delete'
+    threeJSScene: null,       // Three.js scene 引用（用于清理）
+    meshDataCache: null,      // /api/mesh-data 返回的原始数据缓存
+    selectedAnnotation: null, // 当前选中的标注 ID
   };
 
   // ======================== DOM 引用 ========================
@@ -68,9 +75,9 @@
   }
 
   /**
-   * 启动处理计时器 — 使用 requestAnimationFrame 更新加载覆盖层 (#loading-text)，
-   * 避免 setInterval 在 Plotly.react 等同步操作阻塞时停止更新。
-   * 停止时自动显示最终的已用时间。
+   * 启动处理计时器 — 使用 setInterval 更新加载覆盖层 (#loading-text)。
+   * setInterval 基于挂钟时间，不受 requestAnimationFrame 在同步渲染阻塞期间
+   * 停止触发的影响。停止时自动显示最终的已用时间。
    * @param {string} label - 提示文字，如"正在渲染 3D 视图"
    * @returns {Object} { stop, updateText }
    */
@@ -80,7 +87,6 @@
 
     var startTime = Date.now();
     var timerId = null;
-    var lastSeconds = -1;
     var stopped = false;
 
     function formatTime(seconds) {
@@ -90,23 +96,21 @@
       return m + '分' + s + '秒';
     }
 
-    function tick() {
+    function update() {
       if (stopped) return;
       var elapsed = Math.floor((Date.now() - startTime) / 1000);
-      if (elapsed !== lastSeconds) {
-        lastSeconds = elapsed;
-        container.textContent = label + '（⏱ 已用时 ' + formatTime(elapsed) + '）';
-      }
-      timerId = requestAnimationFrame(tick);
+      container.textContent = label + '（⏱ 已用时 ' + formatTime(elapsed) + '）';
     }
 
-    tick();
+    // 立即显示 0s，然后每秒更新一次
+    update();
+    timerId = setInterval(update, 1000);
 
     return {
       stop: function () {
         stopped = true;
         if (timerId) {
-          cancelAnimationFrame(timerId);
+          clearInterval(timerId);
           timerId = null;
         }
         // 停止时显示最终用时
@@ -218,7 +222,7 @@
 
   function getDefaultParams() {
     return {
-      title: "庆元新发现点 — DOM + DEM 三维地形与灾害边界叠加",
+      title: "基于三维地形的POI分布分析",
       title_fontsize: 16,
       title_font: "Microsoft YaHei, Times New Roman, sans-serif",
       vert_exag: 0.8,
@@ -271,13 +275,19 @@
       const data = await resp.json();
       const figData = data.figure;
       if (figData && figData.data && figData.layout) {
-        await Plotly.react(plotlyDiv, figData.data, figData.layout, {
+        // 合并标注 traces
+        var renderData = figData.data;
+        if (state.annotations && state.annotations.length > 0) {
+          var annoTraces = annotationsToPlotlyTraces();
+          renderData = figData.data.concat(annoTraces);
+        }
+        await Plotly.react(plotlyDiv, renderData, figData.layout, {
           responsive: true,
           displayModeBar: true,
           modeBarButtonsToRemove: ["sendDataToCloud", "lasso2d", "select2d"],
           displaylogo: false,
         });
-        state.figure = { data: figData.data, layout: figData.layout };
+        state.figure = { data: renderData, layout: figData.layout };
         setupPlotlyClickHandler();
         log('✅ 实时渲染完成', 'success');
       }
@@ -1079,11 +1089,17 @@
       const data = await resp.json();
       const figData = data.figure;
       if (figData && figData.data && figData.layout) {
+        // 合并标注 traces
+        var renderData = figData.data;
+        if (state.annotations && state.annotations.length > 0) {
+          var annoTraces = annotationsToPlotlyTraces();
+          renderData = figData.data.concat(annoTraces);
+        }
         // 调试日志
         console.log('[3D] plotlyDiv dims before render:', plotlyDiv.clientWidth, 'x', plotlyDiv.clientHeight);
-        console.log('[3D] figure data length:', figData.data.length, 'traces');
+        console.log('[3D] figure data length:', renderData.length, 'traces (includes annotations)');
         try {
-          await Plotly.react(plotlyDiv, figData.data, figData.layout, {
+          await Plotly.react(plotlyDiv, renderData, figData.layout, {
             responsive: true,
             displayModeBar: true,
             modeBarButtonsToRemove: ["sendDataToCloud", "lasso2d", "select2d"],
@@ -1095,7 +1111,7 @@
           console.error('[3D] Plotly.react() FAILED:', plotErr);
           throw plotErr;  // 向上抛出，让外层 catch 处理
         }
-        state.figure = { data: figData.data, layout: figData.layout };
+        state.figure = { data: renderData, layout: figData.layout };
         setupPlotlyClickHandler();
         var renderTime = ((Date.now() - renderStartMs) / 1000).toFixed(1);
         log('✅ 3D 渲染完成（用时 ' + renderTime + ' s）', 'success');
@@ -1320,6 +1336,920 @@
       }
     }
   });
+
+  // ======================== Three.js 标注模式 ========================
+
+  // DOM 引用
+  const annotationModeBar = $("annotation-mode-bar");
+  const annotationModeBtn = $("annotation-mode-btn");
+  const annoCanvasContainer = $("annotation-canvas-container");
+  const annoCanvas = $("annotation-canvas");
+  const annoBackBtn = $("anno-back-btn");
+  const annoListPanel = $("annotation-list-panel");
+
+  let _threeData = null;       // 缓存的 mesh data
+  let _terrainMesh = null;     // Three.js terrain mesh（用于 raycaster）
+  let _annoMeshes = [];        // 标注相关的 Three.js meshes
+  let _lineInProgress = null;  // 画线/测距时暂存的第一点
+  let _renderer = null;
+  let _scene = null;
+  let _camera = null;
+  let _controls = null;
+  let _animFrameId = null;
+  let _annoLabels3D = [];      // CSS3D 标签元素
+
+  // ---- 相机转换工具 ----
+
+  /** Plotly elev/azim/distance → Three.js 球坐标 (弧度) */
+  function plotlyCameraToSpherical(elevDeg, azimDeg, distance) {
+    var elevRad = elevDeg * Math.PI / 180;
+    var azimRad = azimDeg * Math.PI / 180;
+    // Plotly: Z-up, camera orbits origin. Three.js: Y-up.
+    // 映射：Plotly Z → Three Y, Plotly X → Three X, Plotly Y → Three -Z
+    var phi = Math.PI / 2 - elevRad;   // 极角（从 Y 轴）
+    var theta = azimRad;               // 方位角（XZ 平面）
+    return { phi: phi, theta: theta, radius: distance };
+  }
+
+  /** 从 Plotly camera eye 推算 elev/azim */
+  function plotlyEyeToElevAzim(eye) {
+    var x = eye.x || 0, y = eye.y || 0, z = eye.z || 0;
+    var dist = Math.sqrt(x*x + y*y + z*z);
+    // 与 elev_azim_to_eye 反推：x = dist*cos(elev)*cos(azim), y = dist*cos(elev)*sin(azim), z = dist*sin(elev)
+    var elevRad = Math.asin(z / (dist || 1));
+    var elevDeg = elevRad * 180 / Math.PI;
+    var cosElev = Math.cos(elevRad);
+    var azimRad = Math.atan2(y, (cosElev < 1e-9 ? 1e-9 : cosElev) > 0 ? x / cosElev : 0);
+    var azimDeg = Math.atan2(y, x) * 180 / Math.PI;
+    return { elev: elevDeg, azim: azimDeg, distance: dist };
+  }
+
+  /** 获取当前 Plotly 相机状态 */
+  function getPlotlyCameraState() {
+    try {
+      var sceneEl = document.querySelector('#plotly-div .plotly .scene');
+      if (!sceneEl || !sceneEl._sel) return null;
+      var camera = sceneEl._sel.scene.camera;
+      if (!camera || !camera.eye) return null;
+      return camera;
+    } catch (e) { return null; }
+  }
+
+  // ---- 进入/退出标注模式 ----
+
+  async function enterAnnotationMode() {
+    if (state.annotationMode) return;
+    if (!state.sessionId || state.shpOnly) {
+      showError("需要先上传完整的 DEM+DOM+SHP 数据");
+      return;
+    }
+
+    var params = getParamsFromUI();
+    showLoading("正在加载标注模式...");
+
+    try {
+      // 1. 获取 mesh 数据
+      var resp = await fetch("/api/mesh-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: state.sessionId, params: params }),
+      });
+      if (!resp.ok) throw new Error((await resp.json()).detail || "获取 mesh 数据失败");
+      _threeData = await resp.json();
+      state.meshDataCache = _threeData;
+
+      // 2. 初始化 Three.js 场景
+      initThreeScene(_threeData);
+
+      // 3. 构建已存在的标注
+      state.annotations.forEach(function (ann) {
+        renderAnnotationInThree(ann);
+      });
+      renderAnnotationList();
+
+      // 4. 切换视图
+      plotlyDiv.style.display = "none";
+      annoCanvasContainer.classList.remove("hidden");
+      annotationModeBar.classList.add("hidden");
+      downloadArea.classList.add("hidden");
+
+      state.annotationMode = true;
+      state.annotationTool = 'point';
+      updateToolUI();
+
+      log('✏️ 已进入标注模式 — 点击地形放置标注点', 'success');
+      setStatus("标注模式 — 点击地形放置标注点，或切换工具", "step");
+    } catch (err) {
+      showError(err.message);
+      log('❌ 标注模式加载失败: ' + err.message, 'error');
+    } finally {
+      hideLoading();
+    }
+  }
+
+  function exitAnnotationMode() {
+    if (!state.annotationMode) return;
+
+    // 保存 Three.js 相机状态
+    if (_controls) {
+      var sph = new THREE.Spherical();
+      sph.setFromVector3(_camera.position.clone().sub(_controls.target));
+      // 存到 state 以便下次进入时恢复
+    }
+
+    // 清理 Three.js
+    cleanupThreeScene();
+
+    // 同步标注到 Plotly
+    syncAnnotationsToPlotly();
+
+    // 切换视图
+    annoCanvasContainer.classList.add("hidden");
+    plotlyDiv.style.display = "block";
+    annotationModeBar.classList.remove("hidden");
+    if (state.figure) {
+      downloadArea.classList.remove("hidden");
+    }
+
+    state.annotationMode = false;
+    state.annotationTool = 'point';
+
+    log('↩ 已返回查看模式，标注已叠加到 3D 视图', 'success');
+    setStatus("✅ 标注已保存到 3D 视图", "success");
+  }
+
+  /** 标注模式按钮点击 */
+  annotationModeBtn.addEventListener("click", enterAnnotationMode);
+  annoBackBtn.addEventListener("click", exitAnnotationMode);
+
+  // ---- Three.js 场景初始化 ----
+
+  async function initThreeScene(meshData) {
+    var container = annoCanvasContainer;
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+
+    // 动态导入 Three.js（利用 importmap）
+    var THREE_module = await import("three");
+    var OrbitControls_module = await import("three/addons/controls/OrbitControls.js");
+    window.THREE = THREE_module;
+    var THREE_global = THREE_module;
+
+    // Scene
+    _scene = new THREE_global.Scene();
+    _scene.background = new THREE_global.Color(0x1a1a2e);
+    _scene.fog = new THREE_global.Fog(0x1a1a2e, 500, 5000);
+
+    // Camera
+    var aspect = w / (h || 1);
+    _camera = new THREE_global.PerspectiveCamera(45, aspect, 1, 20000);
+    _camera.position.set(0, 800, -1200);
+    _camera.lookAt(0, 0, 0);
+
+    // Renderer
+    _renderer = new THREE_global.WebGLRenderer({ canvas: annoCanvas, antialias: true });
+    _renderer.setSize(w, h);
+    _renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    _renderer.shadowMap.enabled = true;
+
+    // OrbitControls
+    _controls = new OrbitControls_module.OrbitControls(_camera, _renderer.domElement);
+    _controls.enableDamping = true;
+    _controls.dampingFactor = 0.08;
+    _controls.maxPolarAngle = Math.PI / 2 + 0.4;
+
+    // 设置初始相机位置（基于 Plotly 参数或默认值）
+    setThreeCameraFromParams(meshData.params_snapshot);
+
+    // 灯光
+    var ambientLight = new THREE_global.AmbientLight(0x8899bb, 1.8);
+    _scene.add(ambientLight);
+
+    var dirLight = new THREE_global.DirectionalLight(0xffffff, 1.6);
+    dirLight.position.set(500, 1000, 300);
+    _scene.add(dirLight);
+
+    var hemiLight = new THREE_global.HemisphereLight(0x8899cc, 0x443322, 0.8);
+    _scene.add(hemiLight);
+
+    // 构建地形网格
+    buildTerrainMesh(meshData, THREE_global);
+
+    // 构建边界线
+    buildBoundaryLines(meshData, THREE_global);
+
+    // 构建质心标记
+    buildCentroidMarkers(meshData, THREE_global);
+
+    // 点击事件
+    setupAnnotationClickHandler(THREE_global);
+
+    // 窗口 resize
+    function onResize() {
+      if (!_renderer || !state.annotationMode) return;
+      var cw = container.clientWidth;
+      var ch = container.clientHeight;
+      _renderer.setSize(cw, ch);
+      _camera.aspect = cw / (ch || 1);
+      _camera.updateProjectionMatrix();
+    }
+    window.addEventListener("resize", onResize);
+    _annoResizeHandler = onResize;
+
+    // 动画循环
+    function animate() {
+      if (!state.annotationMode) { _animFrameId = null; return; }
+      _animFrameId = requestAnimationFrame(animate);
+      _controls.update();
+      updateAnnotationLabels3D(THREE_global);
+      _renderer.render(_scene, _camera);
+    }
+    animate();
+  }
+
+  var _annoResizeHandler = null;
+
+  function cleanupThreeScene() {
+    if (_animFrameId) { cancelAnimationFrame(_animFrameId); _animFrameId = null; }
+    if (_annoResizeHandler) { window.removeEventListener("resize", _annoResizeHandler); _annoResizeHandler = null; }
+    if (_renderer) { _renderer.dispose(); _renderer = null; }
+    if (_scene) {
+      _scene.traverse(function (obj) {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach(function (m) { m.dispose(); });
+          } else {
+            obj.material.dispose();
+          }
+        }
+      });
+      _scene.clear();
+      _scene = null;
+    }
+    _terrainMesh = null;
+    _annoMeshes = [];
+    _annoLabels3D.forEach(function (el) { if (el.parentNode) el.parentNode.removeChild(el); });
+    _annoLabels3D = [];
+    _camera = null;
+    _controls = null;
+    if (window.THREE) { window.THREE = undefined; }
+  }
+
+  // ---- 地形网格构建 ----
+
+  function buildTerrainMesh(meshData, THREE_global) {
+    var v = meshData.vertices;
+    var nVerts = v.x.length;
+
+    // 坐标归一化：以地形中心为原点
+    var cx = (meshData.meta.x_range[0] + meshData.meta.x_range[1]) / 2;
+    var cy = (meshData.meta.y_range[0] + meshData.meta.y_range[1]) / 2;
+    // 经纬度 → 米（近似）
+    var latMidRad = cy * Math.PI / 180;
+    var metersPerDegX = 111320 * Math.cos(latMidRad);
+    var metersPerDegY = 111320;
+
+    var positions = new Float32Array(nVerts * 3);
+    for (var i = 0; i < nVerts; i++) {
+      positions[i * 3]     = (v.x[i] - cx) * metersPerDegX;   // Three.js X
+      positions[i * 3 + 1] = v.z[i];                           // Three.js Y = 高程
+      positions[i * 3 + 2] = -(v.y[i] - cy) * metersPerDegY;  // Three.js Z (flip for right-hand)
+    }
+
+    // 三角形索引
+    var indices = [];
+    var tris = meshData.triangles;
+    for (var j = 0; j < tris.i.length; j++) {
+      indices.push(tris.i[j], tris.j[j], tris.k[j]);
+    }
+
+    // 顶点颜色
+    var colors = meshData.colors;
+    var colorArr = new Float32Array(nVerts * 3);
+    if (colors && colors.length === nVerts) {
+      for (var k = 0; k < nVerts; k++) {
+        colorArr[k * 3]     = colors[k][0] / 255;
+        colorArr[k * 3 + 1] = colors[k][1] / 255;
+        colorArr[k * 3 + 2] = colors[k][2] / 255;
+      }
+    } else {
+      colorArr.fill(0.5);
+    }
+
+    var geometry = new THREE_global.BufferGeometry();
+    geometry.setAttribute("position", new THREE_global.BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE_global.BufferAttribute(colorArr, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    var material = new THREE_global.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.65,
+      metalness: 0.05,
+      flatShading: false,
+    });
+
+    _terrainMesh = new THREE_global.Mesh(geometry, material);
+    _terrainMesh.name = "terrain";
+    _terrainMesh.userData.isTerrain = true;
+    _scene.add(_terrainMesh);
+
+    // 存储归一化参数
+    _terrainMesh.userData.norm = { cx: cx, cy: cy, mDegX: metersPerDegX, mDegY: metersPerDegY };
+
+    log('🏔 地形网格已构建 — ' + nVerts + ' 顶点, ' + tris.i.length + ' 三角形', 'success');
+  }
+
+  // ---- 边界线构建 ----
+
+  function buildBoundaryLines(meshData, THREE_global) {
+    var norm = _terrainMesh ? _terrainMesh.userData.norm : null;
+    if (!norm) return;
+
+    var boundaries = meshData.boundaries || [];
+    var lineMat = new THREE_global.LineBasicMaterial({ color: 0xFFD700, linewidth: 1 });
+
+    boundaries.forEach(function (b) {
+      var pts = [];
+      for (var i = 0; i < b.x.length; i++) {
+        pts.push(
+          (b.x[i] - norm.cx) * norm.mDegX,
+          b.z[i],
+          -(b.y[i] - norm.cy) * norm.mDegY
+        );
+      }
+      var geom = new THREE_global.BufferGeometry();
+      geom.setAttribute("position", new THREE_global.Float32BufferAttribute(pts, 3));
+      var line = new THREE_global.Line(geom, lineMat);
+      _scene.add(line);
+      _annoMeshes.push(line);
+    });
+  }
+
+  // ---- 质心标记构建 ----
+
+  function buildCentroidMarkers(meshData, THREE_global) {
+    var norm = _terrainMesh ? _terrainMesh.userData.norm : null;
+    if (!norm) return;
+
+    var centroids = meshData.centroids || [];
+    var dotGeom = new THREE_global.SphereGeometry(4, 8, 8);
+    var dotMat = new THREE_global.MeshBasicMaterial({ color: 0xFFD700 });
+
+    centroids.forEach(function (c) {
+      var dot = new THREE_global.Mesh(dotGeom, dotMat);
+      dot.position.set(
+        (c.x - norm.cx) * norm.mDegX,
+        c.z + 1,
+        -(c.y - norm.cy) * norm.mDegY
+      );
+      dot.userData.isCentroid = true;
+      dot.userData.centroidData = c;
+      _scene.add(dot);
+      _annoMeshes.push(dot);
+    });
+  }
+
+  // ---- 相机参数设置 ----
+
+  function setThreeCameraFromParams(paramsSnapshot) {
+    if (!_controls || !_camera || !_terrainMesh) return;
+    var elev = (paramsSnapshot && paramsSnapshot.view_elev) || 40;
+    var azim = (paramsSnapshot && paramsSnapshot.view_azim) || -55;
+    var dist = (paramsSnapshot && paramsSnapshot.view_distance) || 2.5;
+
+    // 计算地形包围盒
+    var box = new THREE.Box3().setFromObject(_terrainMesh);
+    var center = new THREE.Vector3();
+    box.getCenter(center);
+    var size = new THREE.Vector3();
+    box.getSize(size);
+    var maxDim = Math.max(size.x, size.y, size.z) || 100;
+
+    var s = plotlyCameraToSpherical(elev, azim, dist * maxDim * 0.4);
+    var pos = new THREE.Vector3();
+    pos.setFromSpherical(new THREE.Spherical(s.radius, s.phi, s.theta));
+    pos.add(center);
+
+    _controls.target.copy(center);
+    _camera.position.copy(pos);
+    _controls.update();
+  }
+
+  // ---- 点击事件处理 ----
+
+  function setupAnnotationClickHandler(THREE_global) {
+    var raycaster = new THREE_global.Raycaster();
+    var mouse = new THREE_global.Vector2();
+
+    function onClick(event) {
+      if (!state.annotationMode || !_terrainMesh) return;
+
+      // 计算鼠标在 canvas 上的归一化坐标
+      var rect = annoCanvas.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, _camera);
+
+      if (state.annotationTool === 'delete') {
+        // 检测标注网格
+        var annoTargets = _annoMeshes.filter(function (m) {
+          return m.userData && m.userData.annotationId;
+        });
+        var intersects = raycaster.intersectObjects(annoTargets, true);
+        if (intersects.length > 0) {
+          var obj = intersects[0].object;
+          while (obj) {
+            if (obj.userData && obj.userData.annotationId) {
+              deleteAnnotation(obj.userData.annotationId);
+              return;
+            }
+            obj = obj.parent;
+          }
+        }
+        return;
+      }
+
+      // 检测地形点击
+      var intersects = raycaster.intersectObject(_terrainMesh);
+      if (intersects.length === 0) return;
+
+      var point = intersects[0].point;
+      // 转回地理坐标
+      var norm = _terrainMesh.userData.norm;
+      var geoX = point.x / norm.mDegX + norm.cx;
+      var geoY = -point.z / norm.mDegY + norm.cy;
+      var geoZ = point.y;
+
+      if (state.annotationTool === 'point') {
+        addAnnotationPoint(geoX, geoY, geoZ);
+      } else if (state.annotationTool === 'line' || state.annotationTool === 'measure') {
+        if (!_lineInProgress) {
+          _lineInProgress = { x: geoX, y: geoY, z: geoZ };
+          log('📍 第一个点已放置，请点击第二个点完成' + (state.annotationTool === 'measure' ? '测距' : '画线'), 'step');
+          setStatus("请点击第二个点完成" + (state.annotationTool === 'measure' ? '测距' : '画线'), "step");
+        } else {
+          var p1 = _lineInProgress;
+          addAnnotationLine(p1.x, p1.y, p1.z, geoX, geoY, geoZ, state.annotationTool);
+          _lineInProgress = null;
+          setStatus("标注模式 — 点击地形放置标注点，或切换工具", "step");
+        }
+      }
+    }
+
+    annoCanvas.addEventListener("click", onClick);
+    _annoClickHandler = onClick;
+  }
+
+  var _annoClickHandler = null;
+
+  // ---- 添加标注点 ----
+
+  function addAnnotationPoint(gx, gy, gz) {
+    var ann = {
+      id: 'ann_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      type: 'point',
+      x: gx, y: gy, z: gz,
+      label: '标注点 ' + (state.annotations.filter(function(a) { return a.type === 'point'; }).length + 1),
+      color: '#FF6B6B',
+    };
+    state.annotations.push(ann);
+    renderAnnotationInThree(ann);
+    renderAnnotationList();
+    log('📍 已添加标注点: ' + ann.label + ' [' + gx.toFixed(5) + ', ' + gy.toFixed(5) + ', ' + gz.toFixed(1) + 'm]', 'success');
+  }
+
+  // ---- 添加标注线 ----
+
+  function addAnnotationLine(x1, y1, z1, x2, y2, z2, lineType) {
+    // 计算 3D 距离
+    var latMidRad = ((y1 + y2) / 2) * Math.PI / 180;
+    var dx = (x2 - x1) * 111320 * Math.cos(latMidRad);
+    var dy = (y2 - y1) * 111320;
+    var dz = z2 - z1;
+    var distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    var ann = {
+      id: 'ann_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      type: lineType,  // 'line' or 'measure'
+      points: [{ x: x1, y: y1, z: z1 }, { x: x2, y: y2, z: z2 }],
+      x: (x1 + x2) / 2, y: (y1 + y2) / 2, z: (z1 + z2) / 2,  // 标签位置（中点）
+      label: lineType === 'measure' ? distance.toFixed(1) + 'm' : '连线',
+      color: lineType === 'measure' ? '#4ECDC4' : '#FFE66D',
+      distance: lineType === 'measure' ? distance : null,
+    };
+    state.annotations.push(ann);
+    renderAnnotationInThree(ann);
+    renderAnnotationList();
+
+    var logMsg = lineType === 'measure'
+      ? '📐 测距: ' + distance.toFixed(1) + 'm'
+      : '📏 已画线';
+    log(logMsg, 'success');
+  }
+
+  // ---- 在 Three.js 中渲染标注 ----
+
+  function renderAnnotationInThree(ann) {
+    if (!_scene) return;
+    var THREE_global = window.THREE;
+    if (!THREE_global) return;
+    var norm = _terrainMesh ? _terrainMesh.userData.norm : null;
+    if (!norm) return;
+
+    var group = new THREE_global.Group();
+    group.userData.annotationId = ann.id;
+
+    if (ann.type === 'point') {
+      // 小球体
+      var sphereGeom = new THREE_global.SphereGeometry(5, 12, 12);
+      var sphereMat = new THREE_global.MeshStandardMaterial({
+        color: new THREE_global.Color(ann.color),
+        emissive: new THREE_global.Color(ann.color),
+        emissiveIntensity: 0.3,
+        roughness: 0.4,
+      });
+      var sphere = new THREE_global.Mesh(sphereGeom, sphereMat);
+      sphere.position.set(
+        (ann.x - norm.cx) * norm.mDegX,
+        ann.z + 3,
+        -(ann.y - norm.cy) * norm.mDegY
+      );
+      group.add(sphere);
+
+      // 标签（CSS 定位）
+      var labelEl = document.createElement("div");
+      labelEl.className = "annotation-label-3d";
+      labelEl.textContent = ann.label;
+      labelEl.setAttribute("data-anno-id", ann.id);
+      labelEl.setAttribute("data-world", JSON.stringify({ x: ann.x, y: ann.y, z: ann.z + 5 }));
+      annoCanvasContainer.appendChild(labelEl);
+      _annoLabels3D.push(labelEl);
+
+    } else if (ann.type === 'line' || ann.type === 'measure') {
+      // 线段
+      var p0 = ann.points[0];
+      var p1 = ann.points[1];
+      var points = [
+        (p0.x - norm.cx) * norm.mDegX, p0.z + 1, -(p0.y - norm.cy) * norm.mDegY,
+        (p1.x - norm.cx) * norm.mDegX, p1.z + 1, -(p1.y - norm.cy) * norm.mDegY,
+      ];
+      var lineGeom = new THREE_global.BufferGeometry();
+      lineGeom.setAttribute("position", new THREE_global.Float32BufferAttribute(points, 3));
+      var lineMat = new THREE_global.LineBasicMaterial({
+        color: new THREE_global.Color(ann.color),
+        linewidth: 2,
+      });
+      var line = new THREE_global.Line(lineGeom, lineMat);
+      group.add(line);
+
+      // 端点小球
+      [p0, p1].forEach(function (p) {
+        var dotGeom = new THREE_global.SphereGeometry(4, 8, 8);
+        var dotMat = new THREE_global.MeshBasicMaterial({ color: new THREE_global.Color(ann.color) });
+        var dot = new THREE_global.Mesh(dotGeom, dotMat);
+        dot.position.set(
+          (p.x - norm.cx) * norm.mDegX,
+          p.z + 2,
+          -(p.y - norm.cy) * norm.mDegY
+        );
+        group.add(dot);
+      });
+
+      // 标签（中点）
+      var labelEl = document.createElement("div");
+      labelEl.className = "annotation-label-3d";
+      labelEl.textContent = ann.label;
+      labelEl.setAttribute("data-anno-id", ann.id);
+      labelEl.setAttribute("data-world", JSON.stringify({ x: ann.x, y: ann.y, z: ann.z + 5 }));
+      annoCanvasContainer.appendChild(labelEl);
+      _annoLabels3D.push(labelEl);
+    }
+
+    _scene.add(group);
+    _annoMeshes.push(group);
+  }
+
+  // ---- 更新 3D 标签位置（每帧调用） ----
+
+  function updateAnnotationLabels3D(THREE_global) {
+    if (!_camera || !_terrainMesh) return;
+    var norm = _terrainMesh.userData.norm;
+
+    _annoLabels3D.forEach(function (el) {
+      try {
+        var world = JSON.parse(el.getAttribute("data-world"));
+        var worldPos = new THREE_global.Vector3(
+          (world.x - norm.cx) * norm.mDegX,
+          world.z,
+          -(world.y - norm.cy) * norm.mDegY
+        );
+        var screenPos = worldPos.clone().project(_camera);
+        var rect = annoCanvas.getBoundingClientRect();
+        var sx = (screenPos.x * 0.5 + 0.5) * rect.width + rect.left - window.scrollX;
+        var sy = (-screenPos.y * 0.5 + 0.5) * rect.height + rect.top - window.scrollY;
+
+        if (screenPos.z > 0 && screenPos.z < 1) {
+          el.style.display = "";
+          el.style.left = sx + "px";
+          el.style.top = sy + "px";
+        } else {
+          el.style.display = "none";
+        }
+      } catch (e) {}
+    });
+  }
+
+  // ---- 标注工具切换 ----
+
+  function updateToolUI() {
+    ["point", "line", "measure", "delete"].forEach(function (tool) {
+      var btn = document.getElementById("anno-tool-" + tool);
+      if (btn) {
+        btn.classList.toggle("active", state.annotationTool === tool);
+      }
+    });
+    _lineInProgress = null;
+  }
+
+  $("anno-tool-point").addEventListener("click", function () {
+    state.annotationTool = 'point';
+    updateToolUI();
+    setStatus("📍 标注点模式 — 点击地形放置标注点", "step");
+  });
+  $("anno-tool-line").addEventListener("click", function () {
+    state.annotationTool = 'line';
+    updateToolUI();
+    setStatus("📏 画线模式 — 点击第一个点开始", "step");
+  });
+  $("anno-tool-measure").addEventListener("click", function () {
+    state.annotationTool = 'measure';
+    updateToolUI();
+    setStatus("📐 测距模式 — 点击第一个点开始", "step");
+  });
+  $("anno-tool-delete").addEventListener("click", function () {
+    state.annotationTool = 'delete';
+    updateToolUI();
+    setStatus("🗑 删除模式 — 点击标注即可删除", "step");
+  });
+  $("anno-tool-clear").addEventListener("click", function () {
+    if (state.annotations.length === 0) return;
+    if (!confirm("确定要清除所有 " + state.annotations.length + " 个标注吗？")) return;
+    clearAllAnnotations();
+  });
+
+  // ---- 标注列表 ----
+
+  function renderAnnotationList() {
+    var itemsEl = $("annotation-items");
+    if (!itemsEl) return;
+
+    itemsEl.innerHTML = "";
+    state.annotations.forEach(function (ann, idx) {
+      var div = document.createElement("div");
+      div.className = "annotation-item";
+      if (state.selectedAnnotation === ann.id) {
+        div.classList.add("selected");
+      }
+
+      var dot = document.createElement("span");
+      dot.className = "anno-color-dot";
+      dot.style.backgroundColor = ann.color;
+
+      var label = document.createElement("span");
+      label.className = "anno-label";
+      label.textContent = (idx + 1) + ". " + ann.label;
+
+      var delBtn = document.createElement("button");
+      delBtn.className = "anno-delete-btn";
+      delBtn.textContent = "✕";
+      delBtn.title = "删除此标注";
+      delBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        deleteAnnotation(ann.id);
+      });
+
+      div.appendChild(dot);
+      div.appendChild(label);
+      div.appendChild(delBtn);
+
+      div.addEventListener("click", function () {
+        state.selectedAnnotation = ann.id;
+        renderAnnotationList();
+      });
+
+      itemsEl.appendChild(div);
+    });
+
+    // 更新计数
+    var countEl = $("annotation-count");
+    if (countEl) countEl.textContent = state.annotations.length;
+
+    // 显示/隐藏面板
+    annoListPanel.classList.toggle("hidden", state.annotations.length === 0);
+  }
+
+  function deleteAnnotation(id) {
+    var idx = state.annotations.findIndex(function (a) { return a.id === id; });
+    if (idx === -1) return;
+
+    var ann = state.annotations[idx];
+    state.annotations.splice(idx, 1);
+
+    // 从 Three.js 场景中移除
+    _annoMeshes.forEach(function (mesh) {
+      if (mesh.userData && mesh.userData.annotationId === id) {
+        _scene.remove(mesh);
+        mesh.traverse(function (child) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach(function (m) { m.dispose(); });
+            } else {
+              child.material.dispose();
+            }
+          }
+        });
+      }
+    });
+    _annoMeshes = _annoMeshes.filter(function (m) {
+      return !(m.userData && m.userData.annotationId === id);
+    });
+
+    // 移除标签
+    _annoLabels3D = _annoLabels3D.filter(function (el) {
+      if (el.getAttribute("data-anno-id") === id) {
+        if (el.parentNode) el.parentNode.removeChild(el);
+        return false;
+      }
+      return true;
+    });
+
+    if (state.selectedAnnotation === id) state.selectedAnnotation = null;
+    renderAnnotationList();
+    log('🗑 已删除标注: ' + ann.label, 'warn');
+  }
+
+  function clearAllAnnotations() {
+    state.annotations.forEach(function (ann) {
+      _annoMeshes.forEach(function (mesh) {
+        if (mesh.userData && mesh.userData.annotationId === ann.id) {
+          _scene.remove(mesh);
+          mesh.traverse(function (child) {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (Array.isArray(child.material)) {
+                child.material.forEach(function (m) { m.dispose(); });
+              } else {
+                child.material.dispose();
+              }
+            }
+          });
+        }
+      });
+    });
+    _annoMeshes = _annoMeshes.filter(function (m) {
+      return !(m.userData && m.userData.annotationId);
+    });
+    _annoLabels3D.forEach(function (el) {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    });
+    _annoLabels3D = [];
+    state.annotations = [];
+    state.selectedAnnotation = null;
+    renderAnnotationList();
+    log('✕ 已清除所有标注', 'warn');
+  }
+
+  // ---- 标注同步到 Plotly ----
+
+  function annotationsToPlotlyTraces() {
+    if (!state.annotations || state.annotations.length === 0) return [];
+
+    var traces = [];
+    var points = state.annotations.filter(function (a) { return a.type === 'point'; });
+    var lines = state.annotations.filter(function (a) { return a.type === 'line' || a.type === 'measure'; });
+
+    // 点标注 → Scatter3d markers+text
+    if (points.length > 0) {
+      var px = [], py = [], pz = [], ptext = [], pcolors = [];
+      points.forEach(function (a) {
+        px.push(a.x); py.push(a.y); pz.push(a.z);
+        ptext.push(a.label);
+        pcolors.push(a.color);
+      });
+      traces.push({
+        type: "scatter3d",
+        mode: "markers+text",
+        x: px, y: py, z: pz,
+        text: ptext,
+        textposition: "top center",
+        textfont: { size: 10, color: "#ffffff" },
+        marker: {
+          size: 6,
+          color: pcolors,
+          symbol: "circle",
+          line: { color: "white", width: 1.5 },
+        },
+        hoverinfo: "text",
+        hovertext: ptext,
+        showlegend: false,
+        name: "annotations_points",
+      });
+    }
+
+    // 线标注 → Scatter3d lines
+    if (lines.length > 0) {
+      var lx = [], ly = [], lz = [], ltext = [], lcolors = [];
+      lines.forEach(function (a) {
+        a.points.forEach(function (p) {
+          lx.push(p.x); ly.push(p.y); lz.push(p.z);
+        });
+        lx.push(null); ly.push(null); lz.push(null);  // 断线
+        ltext.push(a.label); ltext.push(''); ltext.push('');
+        lcolors.push(a.color);
+      });
+      traces.push({
+        type: "scatter3d",
+        mode: "lines+text",
+        x: lx, y: ly, z: lz,
+        text: ltext,
+        textposition: "top center",
+        textfont: { size: 10, color: "#ffffff" },
+        line: { color: lcolors[0] || "#FFE66D", width: 3 },
+        hoverinfo: "skip",
+        showlegend: false,
+        name: "annotations_lines",
+      });
+    }
+
+    return traces;
+  }
+
+  function syncAnnotationsToPlotly() {
+    if (!state.figure || !state.annotations.length) return;
+
+    var annoTraces = annotationsToPlotlyTraces();
+    if (annoTraces.length === 0) return;
+
+    var figData = state.figure;
+    // 移除旧的标注 traces
+    var cleanData = figData.data.filter(function (t) {
+      return t.name !== "annotations_points" && t.name !== "annotations_lines";
+    });
+    // 追加新标注
+    var newData = cleanData.concat(annoTraces);
+
+    Plotly.react(plotlyDiv, newData, figData.layout, {
+      responsive: true,
+      displayModeBar: true,
+      modeBarButtonsToRemove: ["sendDataToCloud", "lasso2d", "select2d"],
+      displaylogo: false,
+    }).then(function () {
+      state.figure = { data: newData, layout: figData.layout };
+      setupPlotlyClickHandler();
+    }).catch(function (err) {
+      console.warn("标注同步到 Plotly 失败:", err);
+    });
+  }
+
+  // ---- 集成：标注导出到 PNG/HTML ----
+
+  /** 获取当前所有的标注数据，供下载时使用 */
+  function getAnnotationsData() {
+    return state.annotations.map(function (a) {
+      return {
+        id: a.id, type: a.type, x: a.x, y: a.y, z: a.z,
+        label: a.label, color: a.color,
+        points: a.points, distance: a.distance,
+      };
+    });
+  }
+
+  // 上传时清除标注
+  var _origStartUpload = startUpload;
+  startUpload = async function () {
+    state.annotations = [];
+    state.selectedAnnotation = null;
+    _threeData = null;
+    state.meshDataCache = null;
+    return await _origStartUpload();
+  };
+
+  // 显示标注模式按钮（仅在 full data 模式渲染成功后）
+  var _origSwitchTo3DView = switchTo3DView;
+  switchTo3DView = function () {
+    _origSwitchTo3DView();
+    annotationModeBar.classList.remove("hidden");
+  };
+
+  var _origSwitchToCesiumMapView = switchToCesiumMapView;
+  switchToCesiumMapView = function () {
+    _origSwitchToCesiumMapView();
+    annotationModeBar.classList.add("hidden");
+  };
 
   // 初始化状态文本
   updateFileStatus();

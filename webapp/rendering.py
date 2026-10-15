@@ -122,13 +122,18 @@ def _build_surface_trace(data: dict, params: dict) -> go.Surface:
 _MESH_TARGET = 250
 
 
-def _build_mesh_trace(data: dict, params: dict) -> go.Mesh3d:
+def _build_mesh_data(data: dict, params: dict) -> dict:
     """
-    构建地形 Mesh3d trace，使用 vertexcolor（逐顶点 DOM RGB）替代
-    Surface 的单通道 surfacecolor + colorscale 近似。
+    构建地形网格原始数据（供 Mesh3d trace 和 /api/mesh-data 共用）。
 
-    每个顶点直接从增强后的 DOM 获取真实 RGB 颜色，
-    保留植被绿、裸土棕、建筑灰等空间纹理差异。
+    返回:
+        {
+            "x": list[float], "y": list[float], "z": list[float],  # 降采样后的顶点坐标
+            "i": list[int], "j": list[int], "k": list[int],         # 三角形索引
+            "vertexcolor": list[str],  # ['rgb(R,G,B)', ...] 供 Plotly 使用
+            "colors": list[list[int]], # [[R,G,B], ...] 供 Three.js vertexColors 使用
+            "H_sub": int, "W_sub": int,                             # 降采样后网格尺寸
+        }
     """
     X = data["X"]
     Y = data["Y"]
@@ -146,6 +151,7 @@ def _build_mesh_trace(data: dict, params: dict) -> go.Mesh3d:
     W_sub = (W + stride - 1) // stride
 
     # --- 2. 构建 vertexcolor ---
+    colors_raw = None
     if enhanced_dom is not None and enhanced_dom.size > 0:
         rgb_sub = enhanced_dom[::stride, ::stride].reshape(-1, 3)
 
@@ -159,6 +165,7 @@ def _build_mesh_trace(data: dict, params: dict) -> go.Mesh3d:
         # float [0,1] → int [0,255] → rgb 字符串
         rgb_int = (rgb_sub * 255).astype(np.uint8)
         vertexcolor = [f'rgb({r},{g},{b})' for r, g, b in rgb_int]
+        colors_raw = rgb_int.tolist()  # [[R,G,B], ...] for Three.js
     else:
         vertexcolor = 'rgb(128,128,128)'
 
@@ -175,15 +182,39 @@ def _build_mesh_trace(data: dict, params: dict) -> go.Mesh3d:
             j_list.extend([b, e])
             k_list.extend([e, d])
 
-    # --- 4. 构建 trace ---
+    return {
+        "x": xs_sub.tolist(),
+        "y": ys_sub.tolist(),
+        "z": zs_sub.tolist(),
+        "i": i_list,
+        "j": j_list,
+        "k": k_list,
+        "vertexcolor": vertexcolor,
+        "colors": colors_raw,
+        "H_sub": H_sub,
+        "W_sub": W_sub,
+    }
+
+
+def _build_mesh_trace(data: dict, params: dict) -> go.Mesh3d:
+    """
+    构建地形 Mesh3d trace，使用 vertexcolor（逐顶点 DOM RGB）替代
+    Surface 的单通道 surfacecolor + colorscale 近似。
+    """
+    X = data["X"]
+    Y = data["Y"]
+    Z = data["Z"]
+
+    mesh = _build_mesh_data(data, params)
+
     return go.Mesh3d(
-        x=xs_sub,
-        y=ys_sub,
-        z=zs_sub,
-        i=i_list,
-        j=j_list,
-        k=k_list,
-        vertexcolor=vertexcolor,
+        x=mesh["x"],
+        y=mesh["y"],
+        z=mesh["z"],
+        i=mesh["i"],
+        j=mesh["j"],
+        k=mesh["k"],
+        vertexcolor=mesh["vertexcolor"],
         lighting={
             "ambient": 0.45,
             "diffuse": 0.85,

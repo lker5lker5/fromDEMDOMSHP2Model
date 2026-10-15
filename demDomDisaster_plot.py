@@ -44,7 +44,7 @@ if DATA_DIR is None:
 DEM_PATH = DATA_DIR / "DEM_QY-D2.tif"
 DOM_PATH = DATA_DIR / "IMG_QY-D2.tiff"
 SHP_PATH = DATA_DIR / "QY_new_disaster_boundary.shp"
-OUTPUT_PATH = DATA_DIR / "庆元新发现点_3D.png"
+OUTPUT_PATH = DATA_DIR / "POI_3D.png"
 
 # ==================== 3. 参数 ====================
 MAX_SIZE = 600        # 3D 网格最大边长，性能控制，太慢就降到 400
@@ -239,7 +239,7 @@ for _, row in gdf.iterrows():
 ax.set_xlabel("经度", fontsize=11)
 ax.set_ylabel("纬度", fontsize=11)
 ax.set_zlabel("高程 (m)", fontsize=11)
-ax.set_title("庆元新发现点 — DOM + DEM 三维地形与灾害边界叠加",
+ax.set_title("基于三维地形的POI分布分析",
              fontsize=15, fontweight="bold", pad=15)
 ax.xaxis.set_major_locator(MaxNLocator(5))
 ax.view_init(elev=VIEW_ELEV, azim=VIEW_AZIM)

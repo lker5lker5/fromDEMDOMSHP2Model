@@ -952,6 +952,237 @@ html, body {
   text-align: center;
 }
 
+/* ==================== 标注模式（Three.js） ==================== */
+
+#annotation-canvas-container {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  background: #1a1a2e;
+}
+
+#annotation-canvas-container.hidden { display: none; }
+
+#annotation-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 标注模式按钮 */
+#annotation-mode-bar {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-bg);
+}
+
+#annotation-mode-bar.hidden { display: none; }
+
+.btn-annotation {
+  padding: 6px 16px;
+  background: #e67e22;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-annotation:hover {
+  background: #d35400;
+}
+
+/* 标注工具栏 */
+#annotation-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(20, 20, 40, 0.88);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  z-index: 20;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+.anno-tool-btn {
+  padding: 6px 14px;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.06);
+  color: #ccc;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.anno-tool-btn:hover {
+  background: rgba(255,255,255,0.14);
+  color: #fff;
+}
+
+.anno-tool-btn.active {
+  background: rgba(230,126,34,0.35);
+  border-color: #e67e22;
+  color: #fff;
+}
+
+/* 标注列表浮动面板 */
+#annotation-list-panel {
+  position: absolute;
+  top: 72px;
+  right: 12px;
+  width: 220px;
+  max-height: 50%;
+  background: rgba(20, 20, 40, 0.9);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  overflow: hidden;
+}
+
+#annotation-list-panel.hidden { display: none; }
+
+.anno-list-title {
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #eee;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#annotation-count {
+  background: #e67e22;
+  color: #fff;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+
+#annotation-items {
+  overflow-y: auto;
+  flex: 1;
+  padding: 6px;
+}
+
+.annotation-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 3px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 12px;
+  color: #ccc;
+}
+
+.annotation-item:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+.annotation-item.selected {
+  background: rgba(230,126,34,0.25);
+}
+
+.annotation-item .anno-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.annotation-item .anno-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annotation-item .anno-delete-btn {
+  background: none;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.annotation-item:hover .anno-delete-btn {
+  opacity: 1;
+}
+
+.annotation-item .anno-delete-btn:hover {
+  color: #e74c3c;
+}
+
+/* 返回按钮 */
+.anno-back-btn {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 6px 14px;
+  background: rgba(20, 20, 40, 0.88);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  color: #ccc;
+  font-size: 13px;
+  cursor: pointer;
+  z-index: 20;
+  backdrop-filter: blur(8px);
+  transition: all 0.15s;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+.anno-back-btn:hover {
+  background: rgba(255,255,255,0.14);
+  color: #fff;
+}
+
+/* Three.js 标注 CSS 标签 */
+.annotation-label-3d {
+  position: absolute;
+  pointer-events: none;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(0,0,0,0.7);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  transform: translate(-50%, -150%);
+}
+
+.annotation-label-3d::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: rgba(0,0,0,0.7);
+}
+
+/* ==================== 隐藏工具类 ==================== */
 .hidden { display: none; }
 
 /* ==================== 响应式 < 900px ==================== */

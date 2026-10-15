@@ -138,6 +138,12 @@ class DownloadRequest(BaseModel):
     width: int = 1920
     height: int = 1440
     dpi: int = 300
+    annotations: Optional[list] = None
+
+
+class MeshDataRequest(BaseModel):
+    session_id: str
+    params: RenderParams
 
 
 # ==================== 路由 ====================
@@ -328,6 +334,82 @@ async def render(body: RenderRequest):
     return {
         "figure": fig_dict,
         "meta": meta,
+    }
+
+
+@app.post("/api/mesh-data")
+async def mesh_data(body: MeshDataRequest):
+    """
+    返回 Three.js 标注模式所需的地形网格原始数据。
+
+    返回:
+        {
+            "vertices": {"x": [...], "y": [...], "z": [...]},
+            "triangles": {"i": [...], "j": [...], "k": [...]},
+            "colors": [[r,g,b], ...],
+            "H_sub": int, "W_sub": int,
+            "boundaries": [...],
+            "centroids": [...],
+            "meta": {...},
+            "params_snapshot": {...},
+        }
+    """
+    session_info = _get_session(body.session_id)
+    session_dir = session_info["dir"]
+
+    try:
+        cached = processing.load_cached_data(session_dir)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session 数据已丢失，请重新上传")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"数据加载失败：{str(e)}")
+
+    params = body.params.model_dump()
+    data = processing.recompute_with_params(cached, params)
+
+    mesh = rendering._build_mesh_data(data, params)
+
+    # 构建边界线和质心
+    zones = session_info.get("zones", [])
+    boundaries = []
+    centroids = []
+    for zone in zones:
+        for b in zone.get("boundaries", []):
+            boundaries.append({
+                "x": [float(v) for v in b["x"]],
+                "y": [float(v) for v in b["y"]],
+                "z": [float(v) for v in b["z"]],
+            })
+        c = zone.get("centroid", {})
+        centroids.append({
+            "x": float(c.get("x", 0)),
+            "y": float(c.get("y", 0)),
+            "z": float(zone.get("centroid_z", 0)),
+            "label": zone.get("label", str(zone.get("seq", ""))),
+            "seq": zone.get("seq"),
+        })
+
+    meta = session_info.get("meta", {})
+    return {
+        "vertices": {"x": mesh["x"], "y": mesh["y"], "z": mesh["z"]},
+        "triangles": {"i": mesh["i"], "j": mesh["j"], "k": mesh["k"]},
+        "colors": mesh["colors"],
+        "H_sub": mesh["H_sub"],
+        "W_sub": mesh["W_sub"],
+        "boundaries": boundaries,
+        "centroids": centroids,
+        "meta": {
+            "bounds": meta.get("bounds"),
+            "x_range": [min(mesh["x"]), max(mesh["x"])],
+            "y_range": [min(mesh["y"]), max(mesh["y"])],
+            "z_range": [min(mesh["z"]), max(mesh["z"])],
+        },
+        "params_snapshot": {
+            "z_exag_visual": params.get("z_exag_visual", 1.2),
+            "view_elev": params.get("view_elev", 40),
+            "view_azim": params.get("view_azim", -55),
+            "view_distance": params.get("view_distance", 2.5),
+        },
     }
 
 

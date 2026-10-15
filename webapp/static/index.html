@@ -9,6 +9,15 @@
   <link rel="stylesheet" href="/static/style.css">
   <!-- Cesium CDN -->
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.140.0/Build/Cesium/Cesium.js"></script>
+  <!-- Three.js importmap（标注模式使用） -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
 </head>
 <body>
 
@@ -307,10 +316,31 @@
       <div id="plotly-container">
         <div id="plotly-div"></div>
         <div id="cesium-map" class="map-container"></div>
+        <!-- Three.js 标注模式容器 -->
+        <div id="annotation-canvas-container" class="hidden">
+          <canvas id="annotation-canvas"></canvas>
+          <div id="annotation-toolbar">
+            <button id="anno-tool-point" class="anno-tool-btn active" title="点击地形放置标注点">📍 标注点</button>
+            <button id="anno-tool-line" class="anno-tool-btn" title="点击两点画线">📏 画线</button>
+            <button id="anno-tool-measure" class="anno-tool-btn" title="点击两点测量距离">📐 测距</button>
+            <button id="anno-tool-delete" class="anno-tool-btn" title="删除选中标注">🗑 删除</button>
+            <button id="anno-tool-clear" class="anno-tool-btn" title="清除所有标注">✕ 清空</button>
+          </div>
+          <div id="annotation-list-panel" class="hidden">
+            <div class="anno-list-title">📋 标注列表 <span id="annotation-count">0</span></div>
+            <div id="annotation-items"></div>
+          </div>
+          <button id="anno-back-btn" class="anno-back-btn">↩ 返回查看</button>
+        </div>
         <div id="upload-placeholder" class="placeholder">
           <p>🌏 默认显示 Cesium 全球卫星影像 — 浙江省范围</p>
           <p>上传 DEM、DOM 和 SHP 后切换为 3D 视图</p>
         </div>
+      </div>
+
+      <!-- 标注模式按钮 -->
+      <div id="annotation-mode-bar" class="hidden">
+        <button id="annotation-mode-btn" class="btn-annotation">✏️ 增加标注</button>
       </div>
 
       <!-- 下载区 -->
