@@ -75,52 +75,64 @@
   }
 
   /**
-   * 启动处理计时器 — 使用 setInterval 更新加载覆盖层 (#loading-text)。
-   * setInterval 基于挂钟时间，不受 requestAnimationFrame 在同步渲染阻塞期间
-   * 停止触发的影响。停止时自动显示最终的已用时间。
-   * @param {string} label - 提示文字，如"正在渲染 3D 视图"
-   * @returns {Object} { stop, updateText }
+   * 启动处理计时器。
+   *
+   * 方案：主线程 setInterval(Date.now())。Web Worker 虽然
+   * 在独立线程运行，但其 postMessage 响应仍在主线程宏任务队列中，
+   * 若主线程被长时间阻塞（如 Cesium 持续渲染 + Plotly.react
+   * 同步WebGL），消息可能堆积到下一个事件循环 tick 才能处理，
+   * 导致表面现象与主线程 setInterval 相同。
+   *
+   * 因此回归最简方案：setInterval 读取 Date.now()。
+   * 主线程阻塞期间显示必然冻结（JS 单线程硬限制），
+   * 阻塞结束后的下一轮事件循环中回调立即触发并更新到正确的
+   * 已用时间。stop() 延迟 hideLoading 800ms 以确保用户
+   * 能看到完成消息。
+   *
+   * @param {string} label
+   * @returns {{ stop: Function, updateText: Function }|null}
    */
   function startProcessingTimer(label) {
-    var container = loadingText;
-    if (!container) return null;
+    var el = loadingText;
+    if (!el) return null;
 
-    var startTime = Date.now();
-    var timerId = null;
-    var stopped = false;
+    var t0 = Date.now();
+    var id = null;
+    var tickCount = 0;
 
-    function formatTime(seconds) {
-      if (seconds < 60) return seconds + 's';
-      var m = Math.floor(seconds / 60);
-      var s = seconds % 60;
-      return m + '分' + s + '秒';
+    function fmt(s) {
+      if (s < 60) return s + 's';
+      return Math.floor(s / 60) + '分' + (s % 60) + '秒';
     }
 
-    function update() {
-      if (stopped) return;
-      var elapsed = Math.floor((Date.now() - startTime) / 1000);
-      container.textContent = label + '（⏱ 已用时 ' + formatTime(elapsed) + '）';
+    function paint() {
+      tickCount++;
+      var s = Math.floor((Date.now() - t0) / 1000);
+      var txt = label + '（⏱ 已用时 ' + fmt(s) + '）';
+      el.textContent = txt;
+      // 诊断：同时写状态栏 — 若此处持续更新而遮罩停滞，
+      // 问题在 DOM 元素；若两处都停滞，主线程被阻塞。
+      if (statusText) statusText.textContent = txt;
+      // 每 5 次 tick（约 5s）在日志面板记录一条
+      if (tickCount % 5 === 0) {
+        log('⏱ 计时器 tick #' + tickCount + ' 已用时 ' + fmt(s), 'info');
+      }
     }
 
-    // 立即显示 0s，然后每秒更新一次
-    update();
-    timerId = setInterval(update, 1000);
+    paint();
+    id = setInterval(paint, 1000);
 
     return {
       stop: function () {
-        stopped = true;
-        if (timerId) {
-          clearInterval(timerId);
-          timerId = null;
-        }
-        // 停止时显示最终用时
-        var finalElapsed = Math.floor((Date.now() - startTime) / 1000);
-        container.textContent = label + '（完成，总用时 ' + formatTime(finalElapsed) + '）';
+        if (id == null) return;
+        clearInterval(id);
+        id = null;
+        var s = Math.floor((Date.now() - t0) / 1000);
+        el.textContent = label + ' ✔ 完成，总用时 ' + fmt(s);
       },
       updateText: function (newLabel) {
         label = newLabel;
-        var elapsed = Math.floor((Date.now() - startTime) / 1000);
-        container.textContent = label + '（⏱ 已用时 ' + formatTime(elapsed) + '）';
+        paint();
       }
     };
   }
@@ -411,11 +423,12 @@
       });
 
     // 默认视角：浙江省范围
+    // 相机置于浙江以南，俯仰角 -55° 向北俯瞰使视域落在浙江中部
     viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(120.2, 30.3, 300000),
+      destination: Cesium.Cartesian3.fromDegrees(120.5, 24.5, 650000),
       orientation: {
         heading: Cesium.Math.toRadians(0),
-        pitch: Cesium.Math.toRadians(-35),
+        pitch: Cesium.Math.toRadians(-55),
         roll: 0,
       },
     });
@@ -429,6 +442,44 @@
     uploadPlaceholder.style.display = "none";
 
     log('🌍 Cesium 已初始化 — 3D 全球卫星影像 + 地形，浙江省范围', 'success');
+
+    // ---- 加载浙江省界线 ----
+    drawZhejiangBoundary();
+  }
+
+  /** 在 Cesium 底图上绘制浙江省界线（粗虚线） */
+  function drawZhejiangBoundary() {
+    fetch('/static/zhejiang_province.json')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var rings = data.coordinates || [];
+        var drawn = 0;
+        rings.forEach(function (ring) {
+          // 过滤噪点小环
+          if (!ring || ring.length < 7) return;
+          var flat = [];
+          for (var i = 0; i < ring.length; i++) {
+            flat.push(ring[i][0], ring[i][1]);
+          }
+          cesiumViewer.entities.add({
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray(flat),
+              width: 3,
+              material: new Cesium.PolylineDashMaterialProperty({
+                color: Cesium.Color.fromCssColorString('#e53e3e'),
+                dashLength: 16.0,
+              }),
+              clampToGround: true,
+              zIndex: 100,
+            },
+          });
+          drawn++;
+        });
+        log('📍 浙江省界线已加载（' + drawn + ' 段，粗虚线）', 'info');
+      })
+      .catch(function (e) {
+        log('⚠️ 浙江省界线加载失败: ' + e.message, 'warn');
+      });
   }
 
   /** 切换显示：Cesium 地图视图 / Plotly 3D */
@@ -530,6 +581,7 @@
             outlineWidth: 2,
           }
         });
+        polygon._zoneSeq = zone.seq;
         cesiumEntities.push(polygon);
       });
 
@@ -579,8 +631,9 @@
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
-        // 存储 zone 引用用于点击弹窗（必须在 add 之后设置，Cesium Entity 构造器忽略未知属性）
+        // 存储 zone 引用用于点击弹窗和着色
         entity._zoneRef = zone;
+        entity._zoneSeq = zone.seq;
         cesiumEntities.push(entity);
       }
     });
@@ -897,6 +950,25 @@
 
     fieldsContainer.classList.remove("hidden");
     updateFieldCount();
+
+    // 同时填充着色字段下拉
+    populateColorFieldDropdown(fields);
+  }
+
+  /** 填充「按字段着色」下拉选项 */
+  function populateColorFieldDropdown(fields) {
+    var sel = $("param-color_field");
+    if (!sel) return;
+    // 保留第一个"（统一颜色）"选项
+    sel.innerHTML = '<option value="">（统一颜色）</option>';
+    if (fields && fields.length > 0) {
+      fields.forEach(function (f) {
+        var opt = document.createElement("option");
+        opt.value = f.name;
+        opt.textContent = f.name;
+        sel.appendChild(opt);
+      });
+    }
   }
 
   // ======================== 数据处理面板 ========================
@@ -1013,10 +1085,14 @@
       state.defaultParams = Object.assign({}, defaults);
       state.currentParams = Object.assign({}, defaults);
 
-      // 设置 UI（保留用户已有的字段勾选）
+      // 设置 UI（保留用户已有的字段勾选）— 先锁定渲染标志，防止
+      // setParamsToUI 触发的 input 事件通过 scheduleRender 排队并行
+      // doRenderSilent，与下面的 doRender() 产生竞态。
       var preCheckedFields = (userFields.length > 0) ? userFields : defaults.display_fields;
       defaults.display_fields = preCheckedFields;
+      _isRendering = true;
       setParamsToUI(defaults);
+      _isRendering = false;
 
       // 渲染数据处理面板
       renderDiagnostics(data.diagnostics);
@@ -1033,6 +1109,7 @@
         // SHP-only 模式下不可使用 3D 渲染，禁用应用/重置按钮
         $("apply-btn").disabled = true;
         $("reset-btn").disabled = true;
+        hideLoading();
       } else {
         // 全量数据: 3D 渲染
         log('🏔 开始 3D 渲染... (' + (data.zones || []).length + ' 个区划)', 'step');
@@ -1047,18 +1124,19 @@
           setStatus("❌ 渲染失败", "error");
         } finally {
           if (renderTimer) renderTimer.stop();
-          hideLoading();
+          // 延迟 800ms 隐藏遮罩，确保用户能看清"完成"消息
+          setTimeout(hideLoading, 800);
         }
         $("apply-btn").disabled = false;
         $("reset-btn").disabled = false;
       }
     } catch (err) {
       showError(err.message);
+      hideLoading();
       log('❌ 上传/处理失败: ' + err.message, 'error');
       setStatus("❌ " + err.message, "error");
     } finally {
       state.isUploading = false;
-      hideLoading();
     }
   }
 
@@ -1073,6 +1151,7 @@
     state.currentParams = Object.assign({}, params);
 
     log('🎨 正在渲染 3D 视图...', 'step');
+    _isRendering = true;
     const renderStartMs = Date.now();
     try {
       const resp = await fetch("/api/render", {
@@ -1121,6 +1200,8 @@
     } catch (err) {
       showError(err.message);
       log('❌ 渲染失败: ' + err.message, 'error');
+    } finally {
+      _isRendering = false;
     }
   }
 
@@ -1337,6 +1418,404 @@
     }
   });
 
+  // ======================== 统计分析 ========================
+
+  /** 切换到统计分析视图 */
+  function switchToStatsView() {
+    toggleEl($("plotly-container"), false);
+    toggleEl($("download-area"), false);
+    var annoBar = $("annotation-mode-bar");
+    if (annoBar) annoBar.classList.add("hidden");
+    toggleEl($("stats-panel"), true);
+    fetchAndRenderStats();
+  }
+
+  /** 从统计分析切回 3D 视图 */
+  function switchBackFromStats() {
+    toggleEl($("stats-panel"), false);
+    toggleEl($("plotly-container"), true);
+    toggleEl($("download-area"), true);
+    var annoBar = $("annotation-mode-bar");
+    if (annoBar) annoBar.classList.remove("hidden");
+    // 触发 Plotly 自适应大小
+    setTimeout(function () {
+      if (plotlyDiv && plotlyDiv._fullLayout) {
+        Plotly.Plots.resize(plotlyDiv);
+      }
+    }, 100);
+  }
+
+  /** 辅助：根据 visible 添加/移除 hidden 类 */
+  function toggleEl(el, visible) {
+    if (!el) return;
+    if (visible) { el.classList.remove("hidden"); }
+    else { el.classList.add("hidden"); }
+  }
+
+  // 统计分析按钮（在 annotation-mode-bar 中）
+  var statsBtn = $("stats-toggle-btn");
+  if (statsBtn) {
+    statsBtn.addEventListener("click", function () { switchToStatsView(); });
+  }
+  // 统计面板中的返回按钮
+  var statsBackBtn = $("stats-back-btn");
+  if (statsBackBtn) {
+    statsBackBtn.addEventListener("click", function () { switchBackFromStats(); });
+  }
+
+  // ====== Simple-DataTables 实例 ======
+  var _statsDt = null;
+
+  /** 获取并渲染统计数据 */
+  async function fetchAndRenderStats() {
+    var slopeBin = parseFloat($("stats-slope-bin").value) || 10;
+    var elevBin = parseFloat($("stats-elev-bin").value) || 100;
+
+    showLoading("正在计算统计数据...");
+    try {
+      var resp = await fetch("/api/zone-stats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: state.sessionId,
+          slope_bin: slopeBin,
+          elevation_bin: elevBin,
+        }),
+      });
+      if (!resp.ok) {
+        var errData = await resp.json();
+        throw new Error(errData.detail || "统计计算失败");
+      }
+      var stats = await resp.json();
+      renderDataTable(stats.zones);
+      renderPivotCharts(stats);
+      hideLoading();
+    } catch (err) {
+      showError("统计计算失败: " + err.message);
+      log("❌ 统计计算失败: " + err.message, "error");
+      hideLoading();
+    }
+  }
+
+  var statsRefreshBtn = $("stats-refresh-btn");
+  if (statsRefreshBtn) {
+    statsRefreshBtn.addEventListener("click", fetchAndRenderStats);
+  }
+
+  /** 格式化数字 */
+  function fmtNum(v) {
+    if (v == null || isNaN(v)) return "—";
+    return v.toFixed(2);
+  }
+
+  // ====== Simple-DataTables 渲染 ======
+
+  function renderDataTable(zones) {
+    // 构建表体 HTML
+    var rows = zones.map(function (z) {
+      return [
+        "<tr>",
+        "<td>" + z.seq + "</td>",
+        "<td>" + (z.name || "—") + "</td>",
+        "<td>" + (z.pixel_count || 0) + "</td>",
+        "<td>" + fmtNum(z.elevation_mean) + "</td>",
+        "<td>" + fmtNum(z.elevation_min) + "</td>",
+        "<td>" + fmtNum(z.elevation_max) + "</td>",
+        "<td>" + fmtNum(z.elevation_std) + "</td>",
+        "<td>" + fmtNum(z.slope_mean) + "</td>",
+        "<td>" + fmtNum(z.slope_min) + "</td>",
+        "<td>" + fmtNum(z.slope_max) + "</td>",
+        "<td>" + fmtNum(z.slope_std) + "</td>",
+        "</tr>",
+      ].join("");
+    });
+
+    var tbody = document.querySelector("#stats-table tbody");
+    if (!tbody) return;
+    tbody.innerHTML = rows.join("");
+
+    // 销毁旧实例，重新初始化
+    if (_statsDt) {
+      _statsDt.destroy();
+      _statsDt = null;
+    }
+
+    if (typeof simpleDatatables !== "undefined") {
+      _statsDt = new simpleDatatables.DataTable("#stats-table", {
+        perPage: 20,
+        perPageSelect: [10, 20, 50, ["全部", -1]],
+        searchable: true,
+        sortable: true,
+        labels: {
+          placeholder: "搜索...",
+          perPage: "每页",
+          noRows: "暂无数据",
+          info: "第 {start} – {end} 条 / 共 {rows} 条",
+          noResults: "无匹配结果",
+        },
+      });
+    }
+  }
+
+  // ====== 右侧透视图（协调配色） ======
+
+  // 配色方案 — 暖琥珀 + 冷青蓝 + 深海军蓝
+  var PALETTE = {
+    slope: { bar: "#e07b39", barEdge: "#c45a1e", accent: "#fdf0e5" },
+    elevation: { bar: "#2d8c6c", barEdge: "#1b6b4e", accent: "#e6f5f0" },
+  };
+
+  function renderPivotCharts(stats) {
+    // 更新间隔标签
+    var slopeLabel = $("stats-slope-bin-label");
+    var elevLabel = $("stats-elev-bin-label");
+    if (slopeLabel) slopeLabel.textContent = stats.slope_bin;
+    if (elevLabel) elevLabel.textContent = stats.elevation_bin;
+
+    renderPivotBlock("slope", stats.slope_pivot, stats.slope_bin, "°", PALETTE.slope);
+    renderPivotBlock("elevation", stats.elevation_pivot, stats.elevation_bin, "m", PALETTE.elevation);
+  }
+
+  function renderPivotBlock(prefix, pivot, binWidth, unit, palette) {
+    // 总计数标签
+    var totalEl = $(prefix === "slope" ? "stats-slope-total" : "stats-elev-total");
+    if (totalEl) {
+      var total = (pivot.table || []).reduce(function (s, r) { return s + r.count; }, 0);
+      totalEl.textContent = "共 " + total + " 个 Zone";
+    }
+
+    // 透视表
+    var tbody = $(prefix === "slope" ? "stats-slope-pivot-body" : "stats-elev-pivot-body");
+    if (tbody) {
+      tbody.innerHTML = "";
+      (pivot.table || []).forEach(function (row) {
+        var tr = document.createElement("tr");
+        var cls = row.count > 0 ? ' style="font-weight:600;color:#2d3748;"' : ' style="color:#cbd5e0;"';
+        tr.innerHTML = "<td>" + row.range + "</td><td" + cls + ">" + row.count + "</td>";
+        if (row.count > 0) {
+          tr.title = "包含: " + row.zones.join("、");
+        }
+        tbody.appendChild(tr);
+      });
+    }
+
+    // 柱状图
+    var chartEl = $(prefix === "slope" ? "stats-slope-chart" : "stats-elev-chart");
+    if (!chartEl) return;
+    var labels = (pivot.table || []).map(function (r) { return r.range; });
+    var counts = (pivot.table || []).map(function (r) { return r.count; });
+    var titleText = (prefix === "slope" ? "坡度" : "海拔") + "分布（" + binWidth + " " + unit + "/组）";
+    var xTitle = prefix === "slope" ? "坡度 (°)" : "海拔 (m)";
+
+    Plotly.newPlot(chartEl, [{
+      type: "bar",
+      x: labels,
+      y: counts,
+      marker: {
+        color: counts.map(function (c) { return c > 0 ? palette.bar : "#e2e5ea"; }),
+        line: { color: palette.barEdge, width: 0.5 },
+      },
+      hovertemplate: "%{x}<br>Zone 数: %{y}<extra></extra>",
+    }], {
+      title: { text: titleText, font: { size: 13, color: "#2d3748" } },
+      xaxis: { title: { text: xTitle, font: { size: 11 } }, tickangle: -45, tickfont: { size: 10, color: "#718096" } },
+      yaxis: { title: { text: "Zone 数", font: { size: 11 } }, tickfont: { size: 10, color: "#718096" }, dtick: 1 },
+      margin: { t: 36, b: 74, l: 48, r: 16 },
+      height: 260,
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+      bargap: 0.15,
+    }, { responsive: true, displayModeBar: false });
+  }
+
+  // ======================== 专题着色 ========================
+
+  /** 着色字段变更时触发 */
+  var colorFieldSel = $("param-color_field");
+  if (colorFieldSel) {
+    colorFieldSel.addEventListener("change", function () {
+      applyZoneColors(this.value);
+    });
+  }
+
+  /** 存储着色数据，供 plotly traces 合并时使用 */
+  var _zoneColorData = null;  // {zone_colors: [...], legend: [...], field_type}
+
+  async function applyZoneColors(fieldName) {
+    if (!state.sessionId) return;
+    try {
+      var resp = await fetch("/api/zone-colors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: state.sessionId,
+          field_name: fieldName,
+          n_bins: 5,
+        }),
+      });
+      if (!resp.ok) throw new Error((await resp.json()).detail);
+      var data = await resp.json();
+      _zoneColorData = data;
+
+      // 更新 Cesium 多边形颜色（安全调用，失败不影响后续）
+      try { updateCesiumColors(data.zone_colors); } catch (e) { console.warn("updateCesiumColors:", e); }
+
+      // 更新 Plotly 边界线颜色（安全调用）
+      try { updatePlotlyColors(data.zone_colors); } catch (e) { console.warn("updatePlotlyColors:", e); }
+
+      // 渲染图例与调色板编辑器 — 这两个必须执行
+      renderColorLegend(data);
+      renderColorPaletteEditor(data);
+
+      // 保存着色状态，供后续 doRender 合并
+      state.colorField = fieldName;
+      state.zoneColors = data.zone_colors;
+    } catch (err) {
+      showError("着色失败: " + err.message);
+      log("❌ 专题着色失败: " + err.message, "error");
+    }
+  }
+
+  /** 更新 Cesium 实体颜色 */
+  function updateCesiumColors(zoneColors) {
+    if (!cesiumViewer || !cesiumEntities.length) return;
+    // 建立 seq → color 索引
+    var colorMap = {};
+    zoneColors.forEach(function (zc) { colorMap[zc.seq] = zc.color; });
+
+    cesiumEntities.forEach(function (entity) {
+      var seq = entity._zoneSeq;
+      if (seq == null && entity._zoneRef) {
+        seq = entity._zoneRef.seq;
+      }
+      if (seq != null && colorMap[seq] != null) {
+        var c = colorMap[seq];
+        var cesiumColor = Cesium.Color.fromCssColorString(c);
+        if (entity.polygon) {
+          entity.polygon.material = cesiumColor.withAlpha(0.25);
+          entity.polygon.outlineColor = cesiumColor;
+        }
+        if (entity.point) {
+          entity.point.color = cesiumColor;
+        }
+      }
+    });
+  }
+
+  /** 更新 Plotly 边界线颜色 */
+  function updatePlotlyColors(zoneColors) {
+    if (!plotlyDiv || !plotlyDiv._fullLayout) return;
+    // 建立 zone → color 索引
+    var colorMap = {};
+    zoneColors.forEach(function (zc) { colorMap[zc.seq] = zc.color; });
+
+    // 遍历已有 traces，按 name 匹配 zone_seq
+    var traces = plotlyDiv.data;
+    if (!traces) return;
+    var updates = [];
+    traces.forEach(function (trace, idx) {
+      if (!trace.name) return;
+      var m = trace.name.match(/^zone_(\d+)_/);
+      if (m) {
+        var seq = parseInt(m[1]);
+        if (colorMap[seq] != null) {
+          updates.push({
+            index: idx,
+            color: colorMap[seq],
+          });
+        }
+      }
+    });
+
+    // 批量应用
+    var lineColors = {};
+    updates.forEach(function (u) {
+      lineColors[u.index] = u.color;
+    });
+    if (Object.keys(lineColors).length > 0) {
+      Plotly.restyle(plotlyDiv, "line.color", [lineColors]);
+    }
+  }
+
+  /** 渲染图例 */
+  function renderColorLegend(data) {
+    var legendEl = $("color-legend");
+    if (!legendEl) return;
+    if (!data.legend || data.legend.length === 0 ||
+        data.legend.length === 1 && data.field_type === "default") {
+      legendEl.classList.add("hidden");
+      return;
+    }
+    legendEl.classList.remove("hidden");
+
+    var title = data.field_name ? "🎨 " + data.field_name : "🎨 图例";
+    var items = data.legend.map(function (item) {
+      return '<div class="legend-item">' +
+        '<span class="legend-swatch" style="background:' + item.color + '"></span>' +
+        '<span class="legend-label">' + item.label + '</span>' +
+        '</div>';
+    }).join("");
+
+    legendEl.innerHTML =
+      '<div class="legend-title">' + title + '</div>' +
+      '<div class="legend-items">' + items + '</div>';
+  }
+
+  /** 渲染调色板编辑器（在参数面板中，每个值/区间一个颜色选择器） */
+  function renderColorPaletteEditor(data) {
+    var editor = $("color-palette-editor");
+    if (!editor) return;
+    if (!data.legend || data.legend.length === 0 ||
+        data.legend.length === 1 && data.field_type === "default") {
+      editor.classList.add("hidden");
+      return;
+    }
+    editor.classList.remove("hidden");
+
+    var html = '<div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#4a5568;">🎨 调色板</div>';
+    data.legend.forEach(function (item, i) {
+      html += '<div class="palette-row">' +
+        '<input type="color" class="palette-picker" value="' + item.color + '" data-palette-idx="' + i + '">' +
+        '<span class="palette-label">' + item.label + '</span>' +
+        '</div>';
+    });
+    editor.innerHTML = html;
+
+    // 绑定颜色变更
+    var pickers = editor.querySelectorAll(".palette-picker");
+    pickers.forEach(function (picker) {
+      picker.addEventListener("input", function () {
+        onPaletteColorChange(picker);
+      });
+    });
+
+    // 自动滚动到调色板可见区域
+    editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  /** 调色板颜色变更：重新映射并刷新 */
+  function onPaletteColorChange(picker) {
+    if (!_zoneColorData) return;
+    var idx = parseInt(picker.getAttribute("data-palette-idx"));
+    var newColor = picker.value;
+    _zoneColorData.legend[idx].color = newColor;
+    var binLabel = _zoneColorData.legend[idx].label;
+
+    _zoneColorData.zone_colors.forEach(function (zc) {
+      if (zc.bin_label === binLabel) {
+        zc.color = newColor;
+      }
+    });
+
+    try { updateCesiumColors(_zoneColorData.zone_colors); } catch (e) { console.warn(e); }
+    try { updatePlotlyColors(_zoneColorData.zone_colors); } catch (e) { console.warn(e); }
+    try { renderColorLegend(_zoneColorData); } catch (e) { console.warn(e); }
+  }
+
+  // 在 drawShpOnCesium 中记录 zone seq
+  // (修改 drawShpOnCesium 中 entity._zoneRef 赋值处，同时设置 _zoneSeq)
+  // — 在下一次调用 drawShpOnCesium 时生效
+
   // ======================== Three.js 标注模式 ========================
 
   // DOM 引用
@@ -1418,30 +1897,39 @@
       _threeData = await resp.json();
       state.meshDataCache = _threeData;
 
-      // 2. 初始化 Three.js 场景
-      initThreeScene(_threeData);
+      // 2. 先切换视图（让 canvas 容器可见，获得正确尺寸）
+      plotlyDiv.style.display = "none";
+      annoCanvasContainer.classList.remove("hidden");
+      annotationModeBar.classList.add("hidden");
+      downloadArea.classList.add("hidden");
+      state.annotationMode = true;
 
-      // 3. 构建已存在的标注
+      // 3. 等待一帧让布局生效，然后初始化 Three.js
+      await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+      await initThreeScene(_threeData);
+
+      // 4. 构建已存在的标注
       state.annotations.forEach(function (ann) {
         renderAnnotationInThree(ann);
       });
       renderAnnotationList();
 
-      // 4. 切换视图
-      plotlyDiv.style.display = "none";
-      annoCanvasContainer.classList.remove("hidden");
-      annotationModeBar.classList.add("hidden");
-      downloadArea.classList.add("hidden");
-
-      state.annotationMode = true;
       state.annotationTool = 'point';
       updateToolUI();
 
       log('✏️ 已进入标注模式 — 点击地形放置标注点', 'success');
       setStatus("标注模式 — 点击地形放置标注点，或切换工具", "step");
     } catch (err) {
+      // 出错时恢复 Plotly 视图
+      state.annotationMode = false;
+      cleanupThreeScene();
+      annoCanvasContainer.classList.add("hidden");
+      plotlyDiv.style.display = "block";
+      annotationModeBar.classList.remove("hidden");
+      if (state.figure) downloadArea.classList.remove("hidden");
       showError(err.message);
       log('❌ 标注模式加载失败: ' + err.message, 'error');
+      console.error('标注模式错误:', err);
     } finally {
       hideLoading();
     }
@@ -1486,23 +1974,32 @@
 
   async function initThreeScene(meshData) {
     var container = annoCanvasContainer;
+    // 此时 container 已可见，clientWidth/clientHeight 正确
     var w = container.clientWidth;
     var h = container.clientHeight;
 
     // 动态导入 Three.js（利用 importmap）
-    var THREE_module = await import("three");
-    var OrbitControls_module = await import("three/addons/controls/OrbitControls.js");
+    var THREE_module, OrbitControls_module;
+    try {
+      THREE_module = await import("three");
+      OrbitControls_module = await import("three/addons/controls/OrbitControls.js");
+    } catch (importErr) {
+      console.error("Three.js 加载失败:", importErr);
+      throw new Error("Three.js 库加载失败，请检查网络连接");
+    }
     window.THREE = THREE_module;
     var THREE_global = THREE_module;
+
+    log('📦 Three.js 已加载 — 版本: ' + (THREE_global.REVISION || 'unknown'), 'success');
 
     // Scene
     _scene = new THREE_global.Scene();
     _scene.background = new THREE_global.Color(0x1a1a2e);
-    _scene.fog = new THREE_global.Fog(0x1a1a2e, 500, 5000);
+    // fog 在 setThreeCameraFromParams 中根据地形尺寸动态设置
 
-    // Camera
+    // Camera（far 在 setThreeCameraFromParams 中动态调整）
     var aspect = w / (h || 1);
-    _camera = new THREE_global.PerspectiveCamera(45, aspect, 1, 20000);
+    _camera = new THREE_global.PerspectiveCamera(45, aspect, 1, 50000);
     _camera.position.set(0, 800, -1200);
     _camera.lookAt(0, 0, 0);
 
@@ -1518,21 +2015,7 @@
     _controls.dampingFactor = 0.08;
     _controls.maxPolarAngle = Math.PI / 2 + 0.4;
 
-    // 设置初始相机位置（基于 Plotly 参数或默认值）
-    setThreeCameraFromParams(meshData.params_snapshot);
-
-    // 灯光
-    var ambientLight = new THREE_global.AmbientLight(0x8899bb, 1.8);
-    _scene.add(ambientLight);
-
-    var dirLight = new THREE_global.DirectionalLight(0xffffff, 1.6);
-    dirLight.position.set(500, 1000, 300);
-    _scene.add(dirLight);
-
-    var hemiLight = new THREE_global.HemisphereLight(0x8899cc, 0x443322, 0.8);
-    _scene.add(hemiLight);
-
-    // 构建地形网格
+    // 构建地形网格（灯光和相机依赖地形尺寸，先构建）
     buildTerrainMesh(meshData, THREE_global);
 
     // 构建边界线
@@ -1540,6 +2023,43 @@
 
     // 构建质心标记
     buildCentroidMarkers(meshData, THREE_global);
+
+    // --- 灯光（在地形构建后设置，利用包围盒尺寸） ---
+    var terrainBox = new THREE_global.Box3().setFromObject(_terrainMesh);
+    var terrainMaxDim = Math.max(
+      terrainBox.max.x - terrainBox.min.x,
+      terrainBox.max.y - terrainBox.min.y,
+      terrainBox.max.z - terrainBox.min.z
+    ) || 100;
+
+    // 环境光：白色，适中强度，不偏色
+    var ambientLight = new THREE_global.AmbientLight(0xffffff, 1.2);
+    _scene.add(ambientLight);
+
+    // 半球光：天空/地面散射，很弱，仅为避免纯黑阴影
+    var hemiLight = new THREE_global.HemisphereLight(0xffffff, 0x444444, 0.35);
+    _scene.add(hemiLight);
+
+    // 方向光：模拟太阳，位置基于地形尺寸和光照参数
+    var azdeg = (meshData.params_snapshot && meshData.params_snapshot.azdeg) || 315;
+    var altdeg = (meshData.params_snapshot && meshData.params_snapshot.altdeg) || 45;
+    // 但 params_snapshot 可能没有 azdeg，从 render params 推算
+    // 使用 Plotly 默认值：方位角 315° (西北), 高度角 45°
+    var sunAzRad = azdeg * Math.PI / 180;
+    var sunAltRad = altdeg * Math.PI / 180;
+    var sunDist = terrainMaxDim * 2;
+    var sunX = sunDist * Math.cos(sunAltRad) * Math.cos(sunAzRad);
+    var sunY = sunDist * Math.sin(sunAltRad);
+    var sunZ = sunDist * Math.cos(sunAltRad) * Math.sin(sunAzRad);
+
+    var dirLight = new THREE_global.DirectionalLight(0xfff8e8, 1.8);
+    dirLight.position.set(sunX, sunY, sunZ);
+    _scene.add(dirLight);
+
+    log('☀️ 光照: sun=' + sunX.toFixed(0) + ',' + sunY.toFixed(0) + ',' + sunZ.toFixed(0) + ' (az=' + azdeg + ' alt=' + altdeg + ')', 'info');
+
+    // 设置相机位置 — 必须在 buildTerrainMesh 之后（需要 _terrainMesh 计算包围盒）
+    setThreeCameraFromParams(meshData.params_snapshot);
 
     // 点击事件
     setupAnnotationClickHandler(THREE_global);
@@ -1645,8 +2165,8 @@
 
     var material = new THREE_global.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.65,
-      metalness: 0.05,
+      roughness: 0.35,
+      metalness: 0.0,
       flatShading: false,
     });
 
@@ -1717,7 +2237,7 @@
     if (!_controls || !_camera || !_terrainMesh) return;
     var elev = (paramsSnapshot && paramsSnapshot.view_elev) || 40;
     var azim = (paramsSnapshot && paramsSnapshot.view_azim) || -55;
-    var dist = (paramsSnapshot && paramsSnapshot.view_distance) || 2.5;
+    var distNorm = (paramsSnapshot && paramsSnapshot.view_distance) || 2.5;
 
     // 计算地形包围盒
     var box = new THREE.Box3().setFromObject(_terrainMesh);
@@ -1727,14 +2247,24 @@
     box.getSize(size);
     var maxDim = Math.max(size.x, size.y, size.z) || 100;
 
-    var s = plotlyCameraToSpherical(elev, azim, dist * maxDim * 0.4);
+    // Plotly view_distance [1.5, 4.0] → 距离系数 [0.6, 2.0]
+    var distFactor = 0.6 + (distNorm - 1.5) / (4.0 - 1.5) * 1.4;
+    var radius = maxDim * distFactor;
+
+    var s = plotlyCameraToSpherical(elev, azim, radius);
     var pos = new THREE.Vector3();
     pos.setFromSpherical(new THREE.Spherical(s.radius, s.phi, s.theta));
     pos.add(center);
 
     _controls.target.copy(center);
     _camera.position.copy(pos);
+
+    // 确保 far plane 足够大
+    _camera.far = Math.max(50000, radius * 5);
+    _camera.updateProjectionMatrix();
+
     _controls.update();
+    log('📷 相机就绪: 地形=' + maxDim.toFixed(0) + 'm, 距离=' + radius.toFixed(0) + 'm, far=' + _camera.far.toFixed(0), 'info');
   }
 
   // ---- 点击事件处理 ----

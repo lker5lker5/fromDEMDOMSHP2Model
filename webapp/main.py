@@ -15,6 +15,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
 
+import numpy as np
+
 # 确保项目根目录在 sys.path 中，以支持直接运行
 _project_root = Path(__file__).parent.parent
 if str(_project_root) not in sys.path:
@@ -144,6 +146,18 @@ class DownloadRequest(BaseModel):
 class MeshDataRequest(BaseModel):
     session_id: str
     params: RenderParams
+
+
+class ZoneStatsRequest(BaseModel):
+    session_id: str
+    slope_bin: float = 10.0        # 坡度直方图间隔（度）
+    elevation_bin: float = 100.0   # 海拔直方图间隔（米）
+
+
+class ZoneColorRequest(BaseModel):
+    session_id: str
+    field_name: str = ""         # 着色字段名（空字符串 = 恢复默认颜色）
+    n_bins: int = 5              # 数值分段数
 
 
 # ==================== 路由 ====================
@@ -409,8 +423,109 @@ async def mesh_data(body: MeshDataRequest):
             "view_elev": params.get("view_elev", 40),
             "view_azim": params.get("view_azim", -55),
             "view_distance": params.get("view_distance", 2.5),
+            "azdeg": params.get("azdeg", 315),
+            "altdeg": params.get("altdeg", 45),
         },
     }
+
+
+@app.post("/api/zone-stats")
+async def zone_stats(body: ZoneStatsRequest):
+    """
+    返回每个 SHP 区域的海拔/坡度统计 + zone 级透视分布。
+
+    请求:
+        - session_id: 会话 ID
+        - slope_bin: 坡度分组间隔（默认 10 度）
+        - elevation_bin: 海拔分组间隔（默认 100 米）
+
+    返回:
+        {
+            "zones": [{seq, label, name, pixel_count,
+                       elevation_mean/min/max/std, slope_mean/min/max/std}, ...],
+            "slope_pivot": {bins, counts, table: [{range, count, zones}]},
+            "elevation_pivot": {bins, counts, table: [{range, count, zones}]},
+            "slope_bin": float, "elevation_bin": float,
+        }
+    """
+    session_info = _get_session(body.session_id)
+    session_dir = session_info["dir"]
+
+    try:
+        cached = processing.load_cached_data(session_dir)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session 数据已丢失，请重新上传")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"数据加载失败：{str(e)}")
+
+    dem = cached["dem"]
+    X = cached["X"]
+    Y = cached["Y"]
+    ys = cached["ys"]
+    dx = float(cached["dx"])
+    dy = float(cached["dy"])
+
+    # 计算坡度
+    slope = processing.compute_slope(dem, dx, dy, ys)
+
+    # 分区统计
+    zones = session_info.get("zones", [])
+    zone_stats_list = processing.compute_zone_statistics(dem, slope, X, Y, zones)
+
+    # Zone 级透视分组
+    slope_pivot = processing.compute_zone_pivot(zone_stats_list, "slope", body.slope_bin)
+    elev_pivot = processing.compute_zone_pivot(zone_stats_list, "elevation", body.elevation_bin)
+
+    return {
+        "zones": zone_stats_list,
+        "slope_pivot": slope_pivot,
+        "elevation_pivot": elev_pivot,
+        "slope_bin": body.slope_bin,
+        "elevation_bin": body.elevation_bin,
+    }
+
+
+@app.post("/api/zone-colors")
+async def zone_colors(body: ZoneColorRequest):
+    """
+    根据 SHP 属性字段为每个 zone 分配颜色。
+
+    请求:
+        - session_id: 会话 ID
+        - field_name: 着色字段名（空字符串 = 使用默认线色）
+        - n_bins: 数值字段分段数（默认 5）
+
+    返回:
+        {field_type, field_name, zone_colors: [{seq, color, ...}], legend: [...],
+         available_fields: ["field1", "field2", ...]}
+    """
+    session_info = _get_session(body.session_id)
+    zones = session_info.get("zones", [])
+
+    # 收集可用字段
+    available_fields = set()
+    for z in zones:
+        for k in z.get("properties", {}).keys():
+            available_fields.add(k)
+    available_fields = sorted(available_fields)
+
+    # 空字段名 = 恢复默认，返回统一色
+    if not body.field_name:
+        default_color = config.DEFAULT_LINE_COLOR
+        zone_colors = [{"seq": z["seq"], "label": z.get("label", str(z["seq"])),
+                         "value": "—", "color": default_color, "bin_label": ""}
+                       for z in zones]
+        return {
+            "field_type": "default",
+            "field_name": "",
+            "zone_colors": zone_colors,
+            "legend": [{"color": default_color, "label": "默认"}],
+            "available_fields": available_fields,
+        }
+
+    result = processing.assign_zone_colors(zones, body.field_name, body.n_bins)
+    result["available_fields"] = available_fields
+    return result
 
 
 @app.post("/api/download")
@@ -528,12 +643,21 @@ async def delete_session(session_id: str):
     return {"status": "ok", "message": "Session 已清理"}
 
 
-# 每次请求前清理过期 session（中间件方式）
-@app.middleware("http")
-async def cleanup_middleware(request, call_next):
-    _cleanup_old_sessions()
-    response = await call_next(request)
-    return response
+# 每次请求前清理过期 session — 纯 ASGI 中间件，不缓冲响应体，
+# 避免 BaseHTTPMiddleware 对 /api/mesh-data 等大数据端点产生
+# Content-Length 错配 (h11 "Too much data for declared Content-Length")。
+from starlette.types import ASGIApp, Scope, Receive, Send
+
+class _CleanupMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            _cleanup_old_sessions()
+        await self.app(scope, receive, send)
+
+app.add_middleware(_CleanupMiddleware)
 
 
 # 全局异常处理，打印详细错误

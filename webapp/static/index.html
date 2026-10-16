@@ -7,6 +7,9 @@
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.140.0/Build/Cesium/Widgets/widgets.css">
   <link rel="stylesheet" href="/static/style.css">
+  <!-- Simple-DataTables（统计分析表格） -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-datatables@9.0.4/dist/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/simple-datatables@9.0.4/dist/umd/simple-datatables.js"></script>
   <!-- Cesium CDN -->
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.140.0/Build/Cesium/Cesium.js"></script>
   <!-- Three.js importmap（标注模式使用） -->
@@ -64,6 +67,15 @@
             <div id="fields-list"></div>
             <div id="field-check-count" class="field-check-count hidden"></div>
             <div id="field-check-warn" class="field-check-warn hidden"></div>
+            <!-- 按字段着色 -->
+            <div id="color-field-row" style="margin-top:10px;">
+              <label for="param-color_field" style="font-size:13px;font-weight:600;">🎨 按字段着色</label>
+              <select id="param-color_field" style="margin-left:8px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+                <option value="">（统一颜色）</option>
+              </select>
+            </div>
+            <!-- 调色板编辑器（选择着色字段后显示） -->
+            <div id="color-palette-editor" class="hidden" style="margin-top:8px;"></div>
           </div>
           <button id="upload-start-btn" style="display:none;">▶ 开始处理</button>
           <span id="status-text" class="status-idle"></span>
@@ -341,7 +353,11 @@
       <!-- 标注模式按钮 -->
       <div id="annotation-mode-bar" class="hidden">
         <button id="annotation-mode-btn" class="btn-annotation">✏️ 增加标注</button>
+        <button id="stats-toggle-btn" class="btn-annotation">📊 统计分析</button>
       </div>
+
+      <!-- 专题图例 -->
+      <div id="color-legend" class="hidden"></div>
 
       <!-- 下载区 -->
       <div id="download-area" class="hidden">
@@ -369,6 +385,66 @@
 
         <button id="download-png-btn" class="download-btn download-btn-png">⬇ 下载 PNG</button>
         <button id="download-html-btn" class="download-btn download-btn-html">⬇ 下载 HTML</button>
+      </div>
+
+      <!-- 统计分析面板 -->
+      <div id="stats-panel" class="hidden">
+        <!-- 顶部控制栏 -->
+        <div class="stats-controls">
+          <span class="stats-ctrl-group">
+            <label>坡度间隔</label>
+            <input type="number" id="stats-slope-bin" value="10" min="1" max="90" step="1"><span class="stats-unit">°</span>
+          </span>
+          <span class="stats-ctrl-group">
+            <label>海拔间隔</label>
+            <input type="number" id="stats-elev-bin" value="100" min="10" max="1000" step="10"><span class="stats-unit">m</span>
+          </span>
+          <button id="stats-refresh-btn" class="btn-primary stats-btn">🔄 刷新统计</button>
+          <button id="stats-back-btn" class="btn-secondary stats-btn">↩ 返回视图</button>
+        </div>
+        <!-- 主体：左 DataTable + 右 透视（各自独立滚动） -->
+        <div id="stats-body">
+          <!-- 左侧：DataTable（Simple-DataTables 驱动） -->
+          <div id="stats-left">
+            <table id="stats-table">
+              <thead>
+                <tr>
+                  <th>编号</th><th>名称</th><th>面积(px)</th>
+                  <th>均海拔(m)</th><th>最低(m)</th><th>最高(m)</th><th>σ(m)</th>
+                  <th>均坡度(°)</th><th>最低(°)</th><th>最高(°)</th><th>σ(°)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <!-- 右侧：透视区块（独立滚动） -->
+          <div id="stats-right">
+            <!-- 坡度分组 -->
+            <div class="pivot-block">
+              <div class="pivot-title">📐 坡度分组分布 <span class="pivot-bin">（间隔 <span id="stats-slope-bin-label">10</span>°）</span></div>
+              <span class="pivot-total" id="stats-slope-total"></span>
+              <div class="pivot-row">
+                <table class="pivot-table" id="stats-slope-pivot-table">
+                  <thead><tr><th>区间</th><th>数量</th></tr></thead>
+                  <tbody id="stats-slope-pivot-body"></tbody>
+                </table>
+                <div id="stats-slope-chart" class="pivot-chart"></div>
+              </div>
+            </div>
+            <!-- 海拔分组 -->
+            <div class="pivot-block">
+              <div class="pivot-title">⛰ 海拔分组分布 <span class="pivot-bin">（间隔 <span id="stats-elev-bin-label">100</span>m）</span></div>
+              <span class="pivot-total" id="stats-elev-total"></span>
+              <div class="pivot-row">
+                <table class="pivot-table" id="stats-elev-pivot-table">
+                  <thead><tr><th>区间</th><th>数量</th></tr></thead>
+                  <tbody id="stats-elev-pivot-body"></tbody>
+                </table>
+                <div id="stats-elev-chart" class="pivot-chart"></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- 运行日志 -->
@@ -418,6 +494,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=1026c"></script>
 </body>
 </html>

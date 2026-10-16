@@ -776,6 +776,330 @@ def _build_single_color_ramp(r: float, g: float, b: float, n_steps: int = 256,
     return colorscale
 
 
+# ==================== 4a. 坡度与分区统计 ====================
+
+
+def compute_slope(dem: np.ndarray, dx: float, dy: float,
+                  ys: np.ndarray) -> np.ndarray:
+    """
+    从 DEM 计算物理坡度（度）。
+
+    dx/dy 为地理度单位（EPSG:4490），通过纬度平均计算米/度转换系数。
+    返回与 dem 同形状的 2D 坡度数组（度）。
+    """
+    lat_mean = np.radians(np.mean(ys))
+    dx_m = dx * 111320.0 * np.cos(lat_mean)
+    dy_m = dy * 111320.0
+    dzdy, dzdx = np.gradient(dem, dy_m, dx_m)
+    slope = np.degrees(np.arctan(np.sqrt(dzdx ** 2 + dzdy ** 2)))
+    return slope
+
+
+def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
+                             X: np.ndarray, Y: np.ndarray,
+                             zones: list) -> list:
+    """
+    对每个 SHP zone 计算海拔和坡度的分区统计量。
+
+    使用 matplotlib.path.Path.contains_points 做多边形遮罩，
+    提取每个 zone 内的 DEM 和 slope 栅格值，返回统计量。
+    """
+    from matplotlib.path import Path
+
+    H, W = dem.shape
+    points = np.column_stack([X.ravel(), Y.ravel()])
+    results = []
+
+    for zone in zones:
+        boundaries = zone.get("boundaries", [])
+        if not boundaries:
+            continue
+        # 取第一个 ring（外边界）
+        b = boundaries[0]
+        poly_xy = np.column_stack([b["x"], b["y"]])
+        path = Path(poly_xy)
+        mask = path.contains_points(points).reshape(H, W)
+
+        dem_vals = dem[mask]
+        slope_vals = slope[mask]
+        dem_vals = dem_vals[~np.isnan(dem_vals)]
+        slope_vals = slope_vals[~np.isnan(slope_vals)]
+
+        has_dem = len(dem_vals) > 0
+        has_slope = len(slope_vals) > 0
+
+        results.append({
+            "seq": zone["seq"],
+            "label": zone.get("label", str(zone["seq"])),
+            "name": zone.get("name"),
+            "pixel_count": int(np.sum(mask)),
+            "elevation_mean": float(np.mean(dem_vals)) if has_dem else None,
+            "elevation_min": float(np.min(dem_vals)) if has_dem else None,
+            "elevation_max": float(np.max(dem_vals)) if has_dem else None,
+            "elevation_std": float(np.std(dem_vals)) if has_dem else None,
+            "slope_mean": float(np.mean(slope_vals)) if has_slope else None,
+            "slope_min": float(np.min(slope_vals)) if has_slope else None,
+            "slope_max": float(np.max(slope_vals)) if has_slope else None,
+            "slope_std": float(np.std(slope_vals)) if has_slope else None,
+        })
+
+    return results
+
+
+def compute_zone_pivot(zone_stats: list, field: str, bin_width: float) -> dict:
+    """
+    按 zone 均值的字段分组，统计各区间的 zone 分布（透视表）。
+
+    参数:
+        zone_stats: compute_zone_statistics 返回的列表
+        field: "elevation" 或 "slope"
+        bin_width: 分组间隔
+
+    返回:
+        {"bins": [...], "counts": [...], "table": [{range, count, zones}]}
+    """
+    mean_key = field + "_mean"
+    values = []
+    labels = []
+    for z in zone_stats:
+        v = z.get(mean_key)
+        if v is not None:
+            values.append(v)
+            labels.append(z["label"])
+
+    if not values:
+        return {"bins": [], "counts": [], "table": []}
+
+    values = np.array(values)
+    labels = np.array(labels)
+
+    bin_start = np.floor(values.min() / bin_width) * bin_width
+    bin_end = np.ceil(values.max() / bin_width) * bin_width + bin_width
+    bins = np.arange(bin_start, bin_end, bin_width)
+
+    counts = []
+    table = []
+    for i in range(len(bins) - 1):
+        lo, hi = bins[i], bins[i + 1]
+        mask = (values >= lo) & (values < hi)
+        # 最后一个区间包含右边界
+        if i == len(bins) - 2:
+            mask = (values >= lo) & (values <= hi)
+        n = int(np.sum(mask))
+        counts.append(n)
+        table.append({
+            "range": f"{lo:.1f} – {hi:.1f}",
+            "count": n,
+            "zones": labels[mask].tolist(),
+        })
+
+    return {
+        "bins": bins.tolist(),
+        "counts": counts,
+        "table": table,
+    }
+
+
+# ==================== 4b. 属性着色 ====================
+
+# 数值型渐变色带（perceptually uniform: viridis）
+_COLORMAP_NUMERIC = [
+    "#440154", "#482878", "#3e4989", "#31688e", "#26828e",
+    "#1f9e89", "#35b779", "#6ece58", "#b5de2b", "#fde725",
+]
+
+# 分类型离散调色板（ColorBrewer Set2 + Set3）
+_COLORMAP_CATEGORICAL = [
+    "#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854",
+    "#ffd92f", "#e5c494", "#b3b3b3", "#1b9e77", "#d95f02",
+    "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d",
+]
+
+
+def detect_field_type(values: list) -> str:
+    """自动判定字段类型：超过 80% 的值可转为数字 → numeric，否则 categorical。"""
+    if not values:
+        return "categorical"
+    numeric = 0
+    total = 0
+    for v in values:
+        if v is None or str(v).strip() == "":
+            continue
+        total += 1
+        try:
+            float(str(v))
+            numeric += 1
+        except ValueError:
+            pass
+    if total == 0:
+        return "categorical"
+    return "numeric" if numeric / total > 0.8 else "categorical"
+
+
+def assign_zone_colors(zones: list, field_name: str,
+                        n_bins: int = 5) -> dict:
+    """
+    按指定字段值为每个 zone 分配颜色。
+
+    返回:
+        {
+            "field_type": "numeric" | "categorical",
+            "field_name": str,
+            "zone_colors": [{seq, label, value, color, bin_label?}, ...],
+            "legend": [{color, label}, ...],
+        }
+    """
+    # 提取字段值
+    values = []
+    labels = []
+    for z in zones:
+        props = z.get("properties", {})
+        v = props.get(field_name, "")
+        if v is None:
+            v = ""
+        values.append(str(v).strip() if v != "" else "")
+        labels.append(z.get("label", str(z.get("seq", ""))))
+
+    ftype = detect_field_type(values)
+
+    if ftype == "numeric":
+        return _assign_numeric_colors(zones, values, labels, field_name, n_bins)
+    else:
+        return _assign_categorical_colors(zones, values, labels, field_name)
+
+
+def _assign_numeric_colors(zones, raw_values, labels, field_name, n_bins):
+    """数值型：等距分段 + 渐变色带。"""
+    import math
+
+    nums = []
+    for i, v in enumerate(raw_values):
+        if v != "":
+            try:
+                nums.append((float(v), i))
+            except ValueError:
+                pass
+
+    if not nums:
+        return {"field_type": "numeric", "field_name": field_name,
+                "zone_colors": [], "legend": []}
+
+    vals = [n[0] for n in nums]
+    vmin, vmax = min(vals), max(vals)
+    if vmax - vmin < 1e-9:
+        # 所有值相同，统一用中间色
+        cmap = _COLORMAP_NUMERIC
+        mid_color = cmap[len(cmap) // 2]
+        zone_colors = []
+        for i, z in enumerate(zones):
+            zone_colors.append({
+                "seq": z["seq"], "label": labels[i],
+                "value": raw_values[i] if raw_values[i] != "" else "—",
+                "color": mid_color, "bin_label": "全部",
+            })
+        return {
+            "field_type": "numeric", "field_name": field_name,
+            "zone_colors": zone_colors,
+            "legend": [{"color": mid_color, "label": f"{vmin:.1f}"}],
+        }
+
+    # 等距分箱
+    bin_width = (vmax - vmin) / n_bins
+    bin_colors = _build_numeric_bin_colors(n_bins)
+
+    zone_colors = []
+    color_map = {}
+    for i, z in enumerate(zones):
+        raw = raw_values[i]
+        if raw == "":
+            zone_colors.append({
+                "seq": z["seq"], "label": labels[i],
+                "value": "—", "color": "#cccccc", "bin_label": "无数据",
+            })
+            continue
+        try:
+            v = float(raw)
+        except ValueError:
+            zone_colors.append({
+                "seq": z["seq"], "label": labels[i],
+                "value": raw, "color": "#cccccc", "bin_label": "无数据",
+            })
+            continue
+        idx = min(int((v - vmin) / bin_width), n_bins - 1)
+        lo = vmin + idx * bin_width
+        hi = lo + bin_width
+        color = bin_colors[idx]
+        bin_label = f"{lo:.1f} – {hi:.1f}"
+        zone_colors.append({
+            "seq": z["seq"], "label": labels[i],
+            "value": raw, "color": color, "bin_label": bin_label,
+        })
+        color_map[bin_label] = color
+
+    # 有序 legend
+    legend = []
+    for i in range(n_bins):
+        lo = vmin + i * bin_width
+        hi = lo + bin_width
+        bl = f"{lo:.1f} – {hi:.1f}"
+        if bl in color_map:
+            legend.append({"color": color_map[bl], "label": bl})
+    return {
+        "field_type": "numeric", "field_name": field_name,
+        "zone_colors": zone_colors, "legend": legend,
+    }
+
+
+def _build_numeric_bin_colors(n_bins):
+    """从渐变色带中均匀采样 n 个颜色。"""
+    cmap = _COLORMAP_NUMERIC
+    if n_bins >= len(cmap):
+        return cmap[:n_bins]
+    indices = [int(i * (len(cmap) - 1) / max(n_bins - 1, 1)) for i in range(n_bins)]
+    return [cmap[idx] for idx in indices]
+
+
+def _assign_categorical_colors(zones, raw_values, labels, field_name):
+    """分类型：每个唯一值一个颜色。"""
+    uniq = []
+    seen = set()
+    for v in raw_values:
+        if v != "" and v not in seen:
+            uniq.append(v)
+            seen.add(v)
+    # 空值统一为 "—"
+    has_empty = any(v == "" for v in raw_values)
+
+    cmap = _COLORMAP_CATEGORICAL
+    color_map = {}
+    for i, u in enumerate(uniq):
+        color_map[u] = cmap[i % len(cmap)]
+    if has_empty:
+        color_map[""] = "#cccccc"
+
+    zone_colors = []
+    for i, z in enumerate(zones):
+        raw = raw_values[i]
+        color = color_map.get(raw, "#d0d0d0")
+        zone_colors.append({
+            "seq": z["seq"], "label": labels[i],
+            "value": raw if raw != "" else "—",
+            "color": color,
+            "bin_label": raw if raw != "" else "无数据",
+        })
+
+    legend = []
+    for u in uniq:
+        legend.append({"color": color_map[u], "label": u})
+    if has_empty:
+        legend.append({"color": "#cccccc", "label": "无数据"})
+
+    return {
+        "field_type": "categorical", "field_name": field_name,
+        "zone_colors": zone_colors, "legend": legend,
+    }
+
+
 # ==================== 5. 主处理流程 ====================
 
 

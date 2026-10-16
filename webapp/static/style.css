@@ -984,7 +984,8 @@ html, body {
 
 .btn-annotation {
   padding: 6px 16px;
-  background: #e67e22;
+  margin-right: 5px;
+  background: var(--primary);
   color: #fff;
   border: none;
   border-radius: var(--radius);
@@ -1212,6 +1213,213 @@ html, body {
     padding: 8px 12px;
     gap: 6px;
   }
+}
+
+/* ===== 专题图例 ===== */
+#color-legend {
+  position: absolute;
+  top: 100px; right: 16px;
+  background: rgba(255,255,255,0.94);
+  border: 1px solid #e2e5ea;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  z-index: 20;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.legend-title {
+  font-weight: 700; color: #2d3748;
+  margin-bottom: 6px; font-size: 13px;
+}
+.legend-items { display: flex; flex-direction: column; gap: 3px; }
+.legend-item { display: flex; align-items: center; gap: 8px; }
+.legend-swatch {
+  width: 18px; height: 14px; border-radius: 3px;
+  border: 1px solid #cbd5e0; flex-shrink: 0;
+}
+.legend-label { color: #4a5568; white-space: nowrap; }
+
+/* ---- 调色板编辑器（参数面板内） ---- */
+#color-palette-editor {
+  margin-top: 8px; padding: 10px 12px;
+  background: #fefcff; border: 1px solid #e2e5ea;
+  border-left: 3px solid #667eea;
+  border-radius: 6px;
+  max-height: 200px; overflow-y: auto;
+}
+.palette-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px;
+}
+#color-palette-editor.hidden { display: none; }
+.palette-row:last-child { margin-bottom: 0; }
+.palette-picker {
+  width: 28px; height: 22px; padding: 0;
+  border: 1px solid #cbd5e0; border-radius: 4px;
+  cursor: pointer; flex-shrink: 0;
+}
+.palette-label {
+  font-size: 12px; color: #4a5568;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ===== 统计面板 ===== */
+#stats-panel.hidden { display: none; }
+#stats-panel {
+  flex: 1;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  background: #f7f8fa;
+}
+
+/* ---- 顶部控制栏 ---- */
+.stats-controls {
+  display: flex; gap: 14px; align-items: center;
+  padding: 10px 14px;
+  background: #fff;
+  border-bottom: 1px solid #e2e5ea;
+  flex-shrink: 0; flex-wrap: wrap;
+}
+.stats-ctrl-group {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 13px; color: #4a5568;
+}
+.stats-ctrl-group label {
+  font-weight: 600; color: #2d3748;
+}
+.stats-ctrl-group input[type="number"] {
+  width: 62px; padding: 4px 6px;
+  border: 1px solid #cbd5e0; border-radius: 4px;
+  font-size: 13px; text-align: center;
+  background: #fff; color: #2d3748;
+  transition: border-color 0.15s;
+}
+.stats-ctrl-group input[type="number"]:focus {
+  border-color: #3b82f6; outline: none; box-shadow: 0 0 0 2px rgba(59,130,246,0.15);
+}
+.stats-unit { font-size: 12px; color: #718096; }
+.stats-btn {
+  padding: 5px 16px; font-size: 13px; border-radius: 5px;
+  font-weight: 500; cursor: pointer;
+}
+
+/* ---- 主体：左右分栏，各自独立滚动 ---- */
+#stats-body {
+  display: flex; gap: 0;
+  flex: 1; min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- 左侧：DataTable ---- */
+#stats-left {
+  flex: 0 0 430px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px;
+  background: #fff;
+  border-right: 1px solid #e2e5ea;
+}
+/* Simple-DataTables 覆盖：匹配项目风格 */
+#stats-left .datatable-wrapper {
+  border: none; border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+#stats-left .datatable-top {
+  padding: 6px 0 8px;
+  display: flex; gap: 10px; align-items: center;
+}
+#stats-left .datatable-search input {
+  padding: 5px 10px; border: 1px solid #cbd5e0;
+  border-radius: 4px; font-size: 12px; width: 180px;
+}
+#stats-left .datatable-selector {
+  padding: 4px 6px; border: 1px solid #cbd5e0;
+  border-radius: 4px; font-size: 12px; color: #4a5568;
+}
+#stats-left .datatable-table {
+  border-collapse: collapse; width: 100%;
+}
+#stats-left .datatable-table thead th {
+  background: #1e3a5f; color: #e8f0fe;
+  font-weight: 600; font-size: 11px;
+  padding: 7px 8px; border: none;
+  text-align: right; white-space: nowrap;
+  position: sticky; top: 0; z-index: 2;
+}
+#stats-left .datatable-table thead th:first-child { text-align: center; }
+#stats-left .datatable-table thead th:nth-child(2) { text-align: left; }
+#stats-left .datatable-table tbody td {
+  padding: 5px 8px; font-size: 11px;
+  border-bottom: 1px solid #edf2f7;
+  text-align: right; white-space: nowrap; color: #2d3748;
+}
+#stats-left .datatable-table tbody td:first-child { text-align: center; color: #718096; }
+#stats-left .datatable-table tbody td:nth-child(2) { text-align: left; }
+#stats-left .datatable-table tbody tr:nth-child(even) { background: #f7fafc; }
+#stats-left .datatable-table tbody tr:hover { background: #ebf4ff; }
+#stats-left .datatable-table tbody tr:nth-child(even):hover { background: #e1effe; }
+#stats-left .datatable-sorter::before, #stats-left .datatable-sorter::after {
+  border-color: #93b4e0;
+}
+#stats-left .datatable-bottom {
+  padding: 8px 0 4px; font-size: 11px; color: #718096;
+}
+#stats-left .datatable-pagination a {
+  padding: 3px 8px; border: 1px solid #e2e5ea;
+  border-radius: 3px; color: #4a5568; font-size: 11px;
+  text-decoration: none; margin: 0 1px;
+}
+#stats-left .datatable-pagination a:hover { background: #edf2f7; }
+#stats-left .datatable-pagination a.datatable-active {
+  background: #3b82f6; color: #fff; border-color: #3b82f6;
+}
+
+/* ---- 右侧：透视区（独立滚动） ---- */
+#stats-right {
+  flex: 1; min-width: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.pivot-block {
+  background: #fff;
+  border: 1px solid #e2e5ea;
+  border-radius: 8px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  flex-shrink: 0;
+}
+.pivot-title {
+  font-size: 14px; font-weight: 700;
+  margin-bottom: 4px; color: #1e3a5f;
+}
+.pivot-bin { font-weight: 400; color: #718096; font-size: 12px; }
+.pivot-total {
+  display: inline-block; font-size: 11px; color: #a0aec0;
+  margin-bottom: 8px;
+}
+.pivot-row {
+  display: flex; gap: 14px; align-items: flex-start;
+}
+.pivot-table {
+  flex: 0 0 170px;
+  border-collapse: collapse; font-size: 12px;
+  border: 1px solid #edf2f7; border-radius: 4px;
+}
+.pivot-table thead th {
+  background: #edf2f7; color: #2d3748;
+  font-weight: 700; font-size: 11px;
+  padding: 5px 8px; border-bottom: 1px solid #e2e5ea;
+}
+.pivot-table tbody td {
+  padding: 3px 8px; border-bottom: 1px solid #f7fafc;
+  text-align: center; color: #4a5568;
+}
+.pivot-table tbody tr:nth-child(even) { background: #fafbfc; }
+.pivot-table tbody tr:hover { background: #ebf4ff; }
+.pivot-chart {
+  flex: 1; min-width: 300px; min-height: 260px;
 }
 
 @media (max-width: 600px) {
