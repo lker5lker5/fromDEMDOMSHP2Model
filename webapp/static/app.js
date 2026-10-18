@@ -1706,7 +1706,7 @@
     var traces = plotlyDiv.data;
     if (!traces) return;
     var traceIndices = [];
-    var traceColors = [];   // Plotly 要求每个值包裹在自己的数组中
+    var traceColors = [];
 
     traces.forEach(function (trace, idx) {
       if (!trace.name) return;
@@ -1715,15 +1715,14 @@
         var seq = parseInt(m[1]);
         if (colorMap[seq] != null) {
           traceIndices.push(idx);
-          traceColors.push([colorMap[seq]]);
+          traceColors.push(colorMap[seq]);
         }
       }
     });
 
     if (traceIndices.length > 0) {
       // 判断是否使用透明颜色（重置/统一颜色场景）
-      var isTransparent = traceColors.length > 0 &&
-        /rgba\(\s*\d+,\s*\d+,\s*\d+,\s*0\s*\)/.test(traceColors[0][0]);
+      var isTransparent = /rgba\(\s*\d+,\s*\d+,\s*\d+,\s*0\s*\)/.test(traceColors[0]);
       Plotly.restyle(plotlyDiv, {
         "line.color": traceColors,
         "line.width": isTransparent ? 0 : 2.2,
