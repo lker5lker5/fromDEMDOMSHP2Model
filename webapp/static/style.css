@@ -1416,69 +1416,14 @@ html, body {
 }
 .pivot-table tbody tr:nth-child(even) { background: #fafbfc; }
 .pivot-table tbody tr:hover { background: #ebf4ff; }
-.pivot-chart-wrap {
+.pivot-chart {
   flex: 1; min-width: 300px; min-height: 260px;
-  position: relative;       /* 按钮定位上下文 */
-}
-.pivot-chart-wrap .pivot-chart {
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
 }
 
-/* ---- 图表操作按钮（右下角悬浮叠加） ---- */
-.chart-actions {
-  position: absolute; bottom: 8px; right: 8px; z-index: 10;
-  display: flex; gap: 4px;
-}
-.chart-action-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px; border-radius: 6px;
-  border: 1px solid #cbd5e0;
-  background: rgba(255,255,255,0.95);
-  cursor: pointer; font-size: 15px; color: #2d3748;
-  transition: all 0.15s;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
-  pointer-events: auto;
-}
-.chart-action-btn:hover {
-  background: #edf2f7; border-color: #a0aec0; color: #1a202c;
-}
-
-/* ---- 统计图放大弹窗 ---- */
-#chart-zoom-modal {
-  position: fixed; inset: 0; z-index: 10000;
-}
-#chart-zoom-overlay {
-  position: absolute; inset: 0;
-  background: rgba(0,0,0,0.55);
-}
-#chart-zoom-dialog {
-  position: absolute; top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  width: 85vw; height: 85vh; max-width: 1200px; max-height: 900px;
-  background: #fff; border-radius: 10px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-  display: flex; flex-direction: column;
-  overflow: hidden;
-}
-#chart-zoom-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 18px;
-  border-bottom: 1px solid #e2e5ea;
-  background: #f7f8fa;
-}
-#chart-zoom-title {
-  font-size: 15px; font-weight: 700; color: #1e3a5f;
-}
-#chart-zoom-close {
-  width: 32px; height: 32px; border: none; border-radius: 6px;
-  background: transparent; cursor: pointer;
-  font-size: 18px; color: #718096;
-  display: flex; align-items: center; justify-content: center;
-}
-#chart-zoom-close:hover { background: #e2e5ea; color: #2d3748; }
-#chart-zoom-body {
-  flex: 1; min-height: 0;
+/* Plotly 内置 modebar 移至右下角 */
+.pivot-chart .modebar {
+  top: auto !important;
+  bottom: 0 !important;
 }
 
 /* ---- 统计表额外字段列 ---- */

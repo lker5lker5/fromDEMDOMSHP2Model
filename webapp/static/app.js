@@ -1600,128 +1600,23 @@
       bargap: 0.15,
     };
 
-    // 缓存 chart 数据供放大/下载使用
-    _chartCache[chartId] = { data: chartData, layout: chartLayout };
-
     Plotly.newPlot(chartEl, chartData, chartLayout, {
-      responsive: true, displayModeBar: false,
-    });
-
-    // Plotly.newPlot 会清空 .pivot-chart 的 innerHTML。
-    // 按钮注入到外层 .pivot-chart-wrap 中，与 chart 容器平级，
-    // 通过 position:absolute 叠加在图表右下角，完全不受 Plotly 影响。
-    var wrap = chartEl.parentElement;
-    if (wrap && wrap.classList.contains("pivot-chart-wrap")) {
-      var existingActions = wrap.querySelector(".chart-actions");
-      if (existingActions) existingActions.remove();
-      var actionsDiv = document.createElement("div");
-      actionsDiv.className = "chart-actions";
-      actionsDiv.innerHTML =
-        '<button class="chart-action-btn chart-zoom-btn" data-chart="' + chartId + '" title="放大查看">🔍</button>' +
-        '<button class="chart-action-btn chart-dl-btn" data-chart="' + chartId + '" title="下载 PNG">⬇</button>';
-      wrap.appendChild(actionsDiv);
-    }
-  }
-
-  // ====== 统计图放大 / 下载 ======
-
-  /** 统计图数据缓存 { chartElId: { data, layout } } */
-  var _chartCache = {};
-
-  /** 将缓存的 Plotly 图复制到放大弹窗 */
-  function openChartZoom(chartElId) {
-    var cached = _chartCache[chartElId];
-    if (!cached) return;
-    var zoomBody = $("chart-zoom-body");
-    if (!zoomBody) return;
-
-    var origData = cached.data;
-    var origLayout = cached.layout;
-
-    var modal = $("chart-zoom-modal");
-    var titleEl = $("chart-zoom-title");
-    if (titleEl) {
-      titleEl.textContent = (origLayout.title && origLayout.title.text) || "统计图";
-    }
-    modal.classList.remove("hidden");
-
-    // 深拷贝 layout 并调整为放大尺寸
-    var bigLayout = JSON.parse(JSON.stringify(origLayout));
-    bigLayout.height = 550;
-    bigLayout.margin = { t: 40, b: 90, l: 56, r: 24 };
-    if (bigLayout.xaxis) {
-      bigLayout.xaxis.tickfont = { size: 12, color: "#718096" };
-      if (bigLayout.xaxis.title) bigLayout.xaxis.title.font = { size: 13 };
-    }
-    if (bigLayout.yaxis) {
-      bigLayout.yaxis.tickfont = { size: 12, color: "#718096" };
-      if (bigLayout.yaxis.title) bigLayout.yaxis.title.font = { size: 13 };
-    }
-
-    Plotly.newPlot(zoomBody, origData, bigLayout, {
       responsive: true,
       displayModeBar: true,
-      modeBarButtonsToRemove: ["lasso2d", "select2d"],
+      displaylogo: false,
+      modeBarButtonsToRemove: [
+        "zoom2d", "pan2d", "select2d", "lasso2d",
+        "zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d",
+      ],
+      modeBarButtonsToAdd: [],
+      toImageButtonOptions: {
+        format: "png",
+        filename: chartId.replace("stats-", ""),
+        width: 1200,
+        height: 800,
+      },
     });
   }
-
-  function closeChartZoom() {
-    var modal = $("chart-zoom-modal");
-    modal.classList.add("hidden");
-    var zoomBody = $("chart-zoom-body");
-    if (zoomBody) Plotly.purge(zoomBody);
-  }
-
-  /** 下载统计图为 PNG（从缓存的 chart 数据重新渲染后导出） */
-  function downloadChartPNG(chartElId) {
-    var cached = _chartCache[chartElId];
-    if (!cached) return;
-    // 用隐藏容器导出 PNG — Plotly.downloadImage 需要已渲染的 div
-    var chartEl = document.getElementById(chartElId);
-    if (!chartEl) return;
-    Plotly.downloadImage(chartEl, {
-      format: "png",
-      width: 1200,
-      height: 800,
-      filename: chartElId.replace("stats-", ""),
-    });
-  }
-
-  // 事件委托：图表操作按钮
-  document.addEventListener("click", function (e) {
-    var btn = e.target.closest(".chart-zoom-btn");
-    if (btn) {
-      e.preventDefault();
-      openChartZoom(btn.getAttribute("data-chart"));
-      return;
-    }
-    btn = e.target.closest(".chart-dl-btn");
-    if (btn) {
-      e.preventDefault();
-      downloadChartPNG(btn.getAttribute("data-chart"));
-      return;
-    }
-  });
-
-  // 放大弹窗关闭
-  var chartZoomClose = $("chart-zoom-close");
-  if (chartZoomClose) {
-    chartZoomClose.addEventListener("click", closeChartZoom);
-  }
-  var chartZoomOverlay = $("chart-zoom-overlay");
-  if (chartZoomOverlay) {
-    chartZoomOverlay.addEventListener("click", closeChartZoom);
-  }
-
-  // ESC 关闭
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") {
-      var modal = $("chart-zoom-modal");
-      if (modal && !modal.classList.contains("hidden")) {
-        closeChartZoom();
-      }
-    }
-  });
 
   // ======================== 专题着色 ========================
 
