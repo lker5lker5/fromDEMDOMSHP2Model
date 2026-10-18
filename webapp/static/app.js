@@ -1127,6 +1127,15 @@
         }
         state.figure = { data: renderData, layout: figData.layout };
         setupPlotlyClickHandler();
+
+        // 渲染完成后，重新注入已缓存的着色数据
+        if (_zoneColorData && _zoneColorData.zone_colors && _zoneColorData.zone_colors.length > 0) {
+          try {
+            updatePlotlyColors(_zoneColorData.zone_colors);
+            console.log('[color] post-render 着色已重新应用');
+          } catch (e) { console.warn('[color] post-render updatePlotlyColors:', e); }
+        }
+
         var renderTime = ((Date.now() - renderStartMs) / 1000).toFixed(1);
         log('✅ 3D 渲染完成（用时 ' + renderTime + ' s）', 'success');
       } else {
