@@ -1359,6 +1359,7 @@
   function switchToStatsView() {
     toggleEl($("plotly-container"), false);
     toggleEl($("download-area"), false);
+    toggleEl($("color-legend"), false);  // 隐藏着色图例
     var annoBar = $("annotation-mode-bar");
     if (annoBar) annoBar.classList.add("hidden");
     toggleEl($("stats-panel"), true);
@@ -1370,6 +1371,10 @@
     toggleEl($("stats-panel"), false);
     toggleEl($("plotly-container"), true);
     toggleEl($("download-area"), true);
+    // 如果有激活的着色方案，恢复图例
+    if (_zoneColorData && _zoneColorData.legend && _zoneColorData.legend.length > 0) {
+      toggleEl($("color-legend"), true);
+    }
     var annoBar = $("annotation-mode-bar");
     if (annoBar) annoBar.classList.remove("hidden");
     // 触发 Plotly 自适应大小
@@ -1702,28 +1707,25 @@
     // 遍历已有 traces，按 name 匹配 zone_seq
     var traces = plotlyDiv.data;
     if (!traces) return;
-    var updates = [];
+    var totalTraces = traces.length;
+    // Plotly.restyle("line.color", ...) 期望每个 trace 一个元素
+    // 的数组，未匹配的 trace 保持 null（不变）
+    var colors = new Array(totalTraces).fill(null);
     traces.forEach(function (trace, idx) {
       if (!trace.name) return;
       var m = trace.name.match(/^zone_(\d+)_/);
       if (m) {
         var seq = parseInt(m[1]);
         if (colorMap[seq] != null) {
-          updates.push({
-            index: idx,
-            color: colorMap[seq],
-          });
+          colors[idx] = colorMap[seq];
         }
       }
     });
 
-    // 批量应用
-    var lineColors = {};
-    updates.forEach(function (u) {
-      lineColors[u.index] = u.color;
-    });
-    if (Object.keys(lineColors).length > 0) {
-      Plotly.restyle(plotlyDiv, "line.color", [lineColors]);
+    // 检查是否有任何颜色需要更新
+    var hasChange = colors.some(function (c) { return c !== null; });
+    if (hasChange) {
+      Plotly.restyle(plotlyDiv, "line.color", [colors]);
     }
   }
 
