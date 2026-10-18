@@ -493,7 +493,7 @@ def _detect_id_field(gdf: gpd.GeoDataFrame, orig_index: pd.Index) -> tuple:
     """
     自动检测 SHP 图斑 ID 字段与取值。
 
-    优先在属性表中搜索 ID 类字段名；未命中则回退到原始 SHP 行号。
+    优先在属性表中搜索 ID 类字段名；未命中则取除 FID 外的第一列属性字段。
 
     返回:
         (field_name: str or None, values: list[str])
@@ -501,7 +501,13 @@ def _detect_id_field(gdf: gpd.GeoDataFrame, orig_index: pd.Index) -> tuple:
     for f in config.PREFERRED_ID_FIELDS:
         if f in gdf.columns:
             return f, [str(v) if pd.notna(v) else "" for v in gdf[f]]
-    # 回退：使用原始 SHP FID（1-based）
+    # 回退：取除 FID、geometry 外的第一个属性列
+    geo_name = gdf.geometry.name
+    for col in gdf.columns:
+        if col == geo_name or col.lower() == "fid":
+            continue
+        return col, [str(v) if pd.notna(v) else "" for v in gdf[col]]
+    # 兜底：使用原始 SHP FID（1-based）
     return None, [str(int(i) + 1) for i in orig_index]
 
 
@@ -820,6 +826,41 @@ def compute_slope(dem: np.ndarray, dx: float, dy: float,
     return slope
 
 
+# SHP 中常见的面积属性字段名（按优先级排序）
+_AREA_FIELD_CANDIDATES = [
+    "Shape_Area", "ShapeArea", "SHAPE_AREA", "shape_area",
+    "AREA", "Area", "area",
+    "面积",
+]
+
+
+def _extract_area_from_props(properties: dict) -> float | None:
+    """
+    尝试从 SHP 属性中提取面积字段值（单位判断为 m²）。
+
+    仅当字段名匹配且值在合理范围内（> 1 m²）时返回，否则返回 None
+    由调用方自行计算椭球面积。
+    """
+    if not properties:
+        return None
+    for key in _AREA_FIELD_CANDIDATES:
+        val_str = properties.get(key)
+        if val_str is None or val_str == "":
+            continue
+        try:
+            val = float(val_str)
+        except (ValueError, TypeError):
+            continue
+        # 过滤不合理值：极小值（可能是度面积 < 0.0001°²）或 NaN
+        if val < 1.0:
+            continue
+        # 上限：地球上最大的地质灾害区划面积（约 10 万 km²）
+        if val > 1e11:
+            continue
+        return val
+    return None
+
+
 def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
                              X: np.ndarray, Y: np.ndarray,
                              zones: list) -> list:
@@ -875,17 +916,25 @@ def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
                     except Exception:
                         geom = None
 
-        # ---------- 计算椭球面积 ----------
-        area_m2 = 0.0
-        area_km2 = 0.0
-        if geom is not None and not geom.is_empty:
-            try:
-                _area_m2, _ = geod.geometry_area_perimeter(geom)
-                area_m2 = abs(_area_m2)
-                area_km2 = area_m2 / 1_000_000.0
-            except Exception:
-                area_m2 = 0.0
-                area_km2 = 0.0
+        # ---------- 计算面积（优先 SHP 属性字段，其次椭球面积）----------
+        # 1. 尝试从 SHP 属性中读取面积字段
+        props = zone.get("properties", {})
+        area_from_attr = _extract_area_from_props(props)
+        if area_from_attr is not None:
+            area_m2 = area_from_attr
+            area_km2 = area_m2 / 1_000_000.0
+        else:
+            # 2. 使用 pyproj 椭球面积计算
+            area_m2 = 0.0
+            area_km2 = 0.0
+            if geom is not None and not geom.is_empty:
+                try:
+                    _area_m2, _ = geod.geometry_area_perimeter(geom)
+                    area_m2 = abs(_area_m2)
+                    area_km2 = area_m2 / 1_000_000.0
+                except Exception:
+                    area_m2 = 0.0
+                    area_km2 = 0.0
 
         # 自动选择面积单位：>= 1 km² 用 km²，否则用 m²
         if area_km2 >= 1.0:

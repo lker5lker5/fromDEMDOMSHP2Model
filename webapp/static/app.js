@@ -1056,6 +1056,8 @@
       state.zones = data.zones || [];
       state.fields = data.fields || [];
       state.defaultDisplayFields = data.default_display_fields || [];
+      // 确保着色字段下拉有值（上传后重新填充）
+      populateColorFieldDropdown(state.fields);
       const shpOnly = data.shp_only === true;
       state.shpOnly = shpOnly;
 
@@ -1522,8 +1524,8 @@
       for (var f = 0; f < selectedFields.length; f++) {
         headerHtml += "<th class='extra-field'>" + selectedFields[f] + "</th>";
       }
-      headerHtml += "<th>均海拔(m)</th><th>最低(m)</th><th>最高(m)</th><th>σ(m)</th>" +
-        "<th>均坡度(°)</th><th>最低(°)</th><th>最高(°)</th><th>σ(°)</th>" +
+      headerHtml += "<th>均海拔(m)</th>" +
+        "<th>均坡度(°)</th>" +
         "</tr>";
       thead.innerHTML = headerHtml;
     }
@@ -1541,13 +1543,7 @@
       }
       rowHtml +=
         "<td>" + fmtNum(z.elevation_mean) + "</td>" +
-        "<td>" + fmtNum(z.elevation_min) + "</td>" +
-        "<td>" + fmtNum(z.elevation_max) + "</td>" +
-        "<td>" + fmtNum(z.elevation_std) + "</td>" +
         "<td>" + fmtNum(z.slope_mean) + "</td>" +
-        "<td>" + fmtNum(z.slope_min) + "</td>" +
-        "<td>" + fmtNum(z.slope_max) + "</td>" +
-        "<td>" + fmtNum(z.slope_std) + "</td>" +
         "</tr>";
       return rowHtml;
     });
