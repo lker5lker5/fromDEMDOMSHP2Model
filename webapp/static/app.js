@@ -1744,12 +1744,22 @@
       console.log('[color] first few traceIndices:', traceIndices.slice(0, 5));
       console.log('[color] first few traceColors:', traceColors.slice(0, 5));
       var isTransparent = /rgba\(\s*\d+,\s*\d+,\s*\d+,\s*0\s*\)/.test(traceColors[0]);
-      console.log('[color] isTransparent:', isTransparent, 'width:', isTransparent ? 0 : 2.2);
-      Plotly.restyle(plotlyDiv, {
-        "line.color": traceColors,
-        "line.width": isTransparent ? 0 : 2.2,
-      }, traceIndices);
-      console.log('[color] Plotly.restyle() done');
+      var newWidth = isTransparent ? 0 : 2.2;
+      console.log('[color] isTransparent:', isTransparent, 'width:', newWidth);
+
+      // 直接修改 trace data，绕过 Plotly.restyle 对 Scatter3d 可能的处理缺陷
+      traceIndices.forEach(function (traceIdx, i) {
+        if (!plotlyDiv.data[traceIdx].line) {
+          plotlyDiv.data[traceIdx].line = {};
+        }
+        plotlyDiv.data[traceIdx].line.color = traceColors[i];
+        plotlyDiv.data[traceIdx].line.width = newWidth;
+      });
+
+      // 显式触发 WebGL 3D 场景重绘
+      Plotly.redraw(plotlyDiv).then(function () {
+        console.log('[color] Plotly.redraw() done');
+      });
     } else {
       console.warn('[color] No traces matched zone_ pattern!');
     }
