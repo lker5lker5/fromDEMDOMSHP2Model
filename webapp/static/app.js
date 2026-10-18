@@ -74,69 +74,6 @@
     loadingOverlay.classList.add("hidden");
   }
 
-  /**
-   * 启动处理计时器。
-   *
-   * 方案：主线程 setInterval(Date.now())。Web Worker 虽然
-   * 在独立线程运行，但其 postMessage 响应仍在主线程宏任务队列中，
-   * 若主线程被长时间阻塞（如 Cesium 持续渲染 + Plotly.react
-   * 同步WebGL），消息可能堆积到下一个事件循环 tick 才能处理，
-   * 导致表面现象与主线程 setInterval 相同。
-   *
-   * 因此回归最简方案：setInterval 读取 Date.now()。
-   * 主线程阻塞期间显示必然冻结（JS 单线程硬限制），
-   * 阻塞结束后的下一轮事件循环中回调立即触发并更新到正确的
-   * 已用时间。stop() 延迟 hideLoading 800ms 以确保用户
-   * 能看到完成消息。
-   *
-   * @param {string} label
-   * @returns {{ stop: Function, updateText: Function }|null}
-   */
-  function startProcessingTimer(label) {
-    var el = loadingText;
-    if (!el) return null;
-
-    var t0 = Date.now();
-    var id = null;
-    var tickCount = 0;
-
-    function fmt(s) {
-      if (s < 60) return s + 's';
-      return Math.floor(s / 60) + '分' + (s % 60) + '秒';
-    }
-
-    function paint() {
-      tickCount++;
-      var s = Math.floor((Date.now() - t0) / 1000);
-      var txt = label + '（⏱ 已用时 ' + fmt(s) + '）';
-      el.textContent = txt;
-      // 诊断：同时写状态栏 — 若此处持续更新而遮罩停滞，
-      // 问题在 DOM 元素；若两处都停滞，主线程被阻塞。
-      if (statusText) statusText.textContent = txt;
-      // 每 5 次 tick（约 5s）在日志面板记录一条
-      if (tickCount % 5 === 0) {
-        log('⏱ 计时器 tick #' + tickCount + ' 已用时 ' + fmt(s), 'info');
-      }
-    }
-
-    paint();
-    id = setInterval(paint, 1000);
-
-    return {
-      stop: function () {
-        if (id == null) return;
-        clearInterval(id);
-        id = null;
-        var s = Math.floor((Date.now() - t0) / 1000);
-        el.textContent = label + ' ✔ 完成，总用时 ' + fmt(s);
-      },
-      updateText: function (newLabel) {
-        label = newLabel;
-        paint();
-      }
-    };
-  }
-
   /** 记录日志到右侧日志面板 */
   function log(msg, type) {
     type = type || "info";
