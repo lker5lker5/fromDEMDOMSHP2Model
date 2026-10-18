@@ -583,6 +583,7 @@ def read_shp_to_4490(shp_dir: str, shp_stem: str, dem_info: dict) -> dict:
             "centroid": {"x": float(cx), "y": float(cy)},
             "centroid_z": float(cz),
             "properties": properties,
+            "geom_wkt": geom.wkt,   # 保留原始 WKT，供分区统计精确 mask
         })
 
     return {
@@ -801,19 +802,53 @@ def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
     """
     对每个 SHP zone 计算海拔和坡度的分区统计量。
 
-    使用 matplotlib.path.Path.contains_points 做多边形遮罩，
-    提取每个 zone 内的 DEM 和 slope 栅格值，返回统计量。
+    使用 rasterio.features.rasterize 做矢量→栅格多边形遮罩，
+    比 matplotlib.path.Path.contains_points 更可靠：
+      - 即使图斑小于一个像元也能捕获
+      - 正确处理多边形闭合和方向
+      - 支持所有 Shapely 几何类型（Polygon / MultiPolygon / …）
     """
-    from matplotlib.path import Path
+    from rasterio.features import rasterize
+    from affine import Affine
+    from shapely import wkt as shapely_wkt
 
     H, W = dem.shape
-    points = np.column_stack([X.ravel(), Y.ravel()])
+
+    # 从 meshgrid 反算 affine transform（EPSG:4490 度单位）
+    a = X[0, 1] - X[0, 0]       # 像元宽（度）
+    c = X[0, 0] - a / 2.0        # 左边缘 X
+    e = Y[1, 0] - Y[0, 0]       # 像元高（度，通常为负——北在上）
+    f = Y[0, 0] - e / 2.0        # 上边缘 Y
+    transform = Affine(a, 0.0, c, 0.0, e, f)
+
     results = []
 
     for zone in zones:
-        boundaries = zone.get("boundaries", [])
-        if not boundaries:
-            # 无边界（如 Point 类型几何），仍然录入，但统计量为空
+        # ---------- 尝试从 WKT 重建精确几何 ----------
+        geom = None
+        geom_wkt = zone.get("geom_wkt")
+        if geom_wkt:
+            try:
+                geom = shapely_wkt.loads(geom_wkt)
+            except Exception:
+                geom = None
+
+        # 回退：从 boundaries[0] 重建（旧 session 兼容）
+        if geom is None:
+            boundaries = zone.get("boundaries", [])
+            if boundaries:
+                from shapely.geometry import Polygon as ShapelyPolygon
+                b = boundaries[0]
+                coords = list(zip(b["x"], b["y"]))
+                if len(coords) >= 3:
+                    try:
+                        g = ShapelyPolygon(coords)
+                        geom = g if g.is_valid else g.buffer(0)
+                    except Exception:
+                        geom = None
+
+        # ---------- 无有效几何 → 空统计量 ----------
+        if geom is None:
             results.append({
                 "seq": zone["seq"],
                 "label": zone.get("label", str(zone["seq"])),
@@ -825,11 +860,17 @@ def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
                 "slope_max": None, "slope_std": None,
             })
             continue
-        # 取第一个 ring（外边界）
-        b = boundaries[0]
-        poly_xy = np.column_stack([b["x"], b["y"]])
-        path = Path(poly_xy)
-        mask = path.contains_points(points).reshape(H, W)
+
+        # ---------- 栅格化多边形 ----------
+        # rasterize 返回 shape=(H, W) 的 uint8 数组，0=背景，1=多边形内
+        mask = rasterize(
+            [(geom, 1)],
+            out_shape=(H, W),
+            transform=transform,
+            fill=0,
+            all_touched=True,    # 只要像元与多边形有交集就纳入，避免子像元图斑被遗漏
+            dtype="uint8",
+        ).astype(bool)
 
         dem_vals = dem[mask]
         slope_vals = slope[mask]
@@ -1387,6 +1428,7 @@ def process_shp_only(shp_zip_path: Path, session_dir: Path) -> dict:
             "centroid": {"x": cx, "y": cy},
             "centroid_z": 0.0,
             "properties": properties,
+            "geom_wkt": geom.wkt,   # 保留原始 WKT，供后续统计使用
         })
 
     proc_time = time.time() - t_start
