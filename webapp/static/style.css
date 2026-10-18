@@ -1347,15 +1347,13 @@ html, body {
   text-align: right; white-space: nowrap;
   position: sticky; top: 0; z-index: 2;
 }
-#stats-left .datatable-table thead th:first-child { text-align: center; }
-#stats-left .datatable-table thead th:nth-child(2) { text-align: left; }
+#stats-left .datatable-table thead th:first-child { text-align: left; }
 #stats-left .datatable-table tbody td {
   padding: 5px 8px; font-size: 11px;
   border-bottom: 1px solid #edf2f7;
   text-align: right; white-space: nowrap; color: #2d3748;
 }
-#stats-left .datatable-table tbody td:first-child { text-align: center; color: #718096; }
-#stats-left .datatable-table tbody td:nth-child(2) { text-align: left; }
+#stats-left .datatable-table tbody td:first-child { text-align: left; }
 #stats-left .datatable-table tbody tr:nth-child(even) { background: #f7fafc; }
 #stats-left .datatable-table tbody tr:hover { background: #ebf4ff; }
 #stats-left .datatable-table tbody tr:nth-child(even):hover { background: #e1effe; }

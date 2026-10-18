@@ -1455,7 +1455,6 @@
     var thead = document.querySelector("#stats-table thead");
     if (thead) {
       var headerHtml = "<tr>" +
-        "<th>编号</th>" +
         "<th>SHP_ID</th>" +
         "<th>面积</th>";
       for (var f = 0; f < selectedFields.length; f++) {
@@ -1471,7 +1470,6 @@
     var rows = zones.map(function (z) {
       var props = z.properties || {};
       var rowHtml = "<tr>" +
-        "<td>" + z.seq + "</td>" +
         "<td>" + (z.shp_id || z.seq) + "</td>" +
         "<td>" + (z.area_display || "—") + "</td>";
       // 用户勾选字段
