@@ -1313,8 +1313,7 @@ html, body {
 /* ---- 左侧：DataTable ---- */
 #stats-left {
   flex: 0 0 430px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: auto;          /* 上下 + 左右均可滚动 */
   padding: 10px;
   background: #fff;
   border-right: 1px solid #e2e5ea;
@@ -1420,6 +1419,69 @@ html, body {
 .pivot-table tbody tr:hover { background: #ebf4ff; }
 .pivot-chart {
   flex: 1; min-width: 300px; min-height: 260px;
+}
+
+/* ---- 图表操作按钮 ---- */
+.chart-actions {
+  display: flex; gap: 6px; justify-content: flex-end;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid #edf2f7;
+}
+.chart-action-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+  border: 1px solid #cbd5e0; border-radius: 6px;
+  background: #fff; cursor: pointer;
+  font-size: 14px; color: #4a5568;
+  transition: all 0.15s;
+}
+.chart-action-btn:hover {
+  background: #edf2f7; border-color: #a0aec0; color: #2d3748;
+}
+
+/* ---- 统计图放大弹窗 ---- */
+#chart-zoom-modal {
+  position: fixed; inset: 0; z-index: 10000;
+}
+#chart-zoom-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.55);
+}
+#chart-zoom-dialog {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 85vw; height: 85vh; max-width: 1200px; max-height: 900px;
+  background: #fff; border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#chart-zoom-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid #e2e5ea;
+  background: #f7f8fa;
+}
+#chart-zoom-title {
+  font-size: 15px; font-weight: 700; color: #1e3a5f;
+}
+#chart-zoom-close {
+  width: 32px; height: 32px; border: none; border-radius: 6px;
+  background: transparent; cursor: pointer;
+  font-size: 18px; color: #718096;
+  display: flex; align-items: center; justify-content: center;
+}
+#chart-zoom-close:hover { background: #e2e5ea; color: #2d3748; }
+#chart-zoom-body {
+  flex: 1; min-height: 0;
+}
+
+/* ---- 统计表额外字段列 ---- */
+#stats-left .datatable-table th.extra-field {
+  background: #2d4a6e; font-size: 11px; min-width: 80px;
+}
+#stats-left .datatable-table td.extra-field {
+  font-size: 11px; color: #4a5568;
 }
 
 @media (max-width: 600px) {

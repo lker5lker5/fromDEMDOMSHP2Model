@@ -78,6 +78,13 @@ DOWNLOAD_DPI = 300
 # ==================== 常用字段名（自动检测标注字段） ====================
 PREFERRED_NAME_FIELDS = ["name", "Name", "NAME", "名称", "区名", "灾害点", "隐患点"]
 
+# 常用 ID 字段名（自动检测 SHP 图斑 ID）
+PREFERRED_ID_FIELDS = [
+    "FID", "fid", "ID", "id", "OBJECTID", "objectid", "OBJECTID_1",
+    "BSM", "bsm", "TBYBH", "tbybh", "YSDM", "ysdm",
+    "编号", "序号", "代码", "标识码", "图斑编号",
+]
+
 # ==================== 可用参数列表（用于 /api/render 校验） ====================
 RENDER_PARAMS = {
     "title": str,

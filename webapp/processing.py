@@ -489,6 +489,22 @@ def _detect_name_field(gdf: gpd.GeoDataFrame) -> Optional[str]:
     return None
 
 
+def _detect_id_field(gdf: gpd.GeoDataFrame, orig_index: pd.Index) -> tuple:
+    """
+    自动检测 SHP 图斑 ID 字段与取值。
+
+    优先在属性表中搜索 ID 类字段名；未命中则回退到原始 SHP 行号。
+
+    返回:
+        (field_name: str or None, values: list[str])
+    """
+    for f in config.PREFERRED_ID_FIELDS:
+        if f in gdf.columns:
+            return f, [str(v) if pd.notna(v) else "" for v in gdf[f]]
+    # 回退：使用原始 SHP FID（1-based）
+    return None, [str(int(i) + 1) for i in orig_index]
+
+
 def read_shp_to_4490(shp_dir: str, shp_stem: str, dem_info: dict) -> dict:
     """
     读取 SHP，重投影到 EPSG:4490，提取边界坐标和高程。
@@ -519,11 +535,17 @@ def read_shp_to_4490(shp_dir: str, shp_stem: str, dem_info: dict) -> dict:
     shp_path = shp_dir / f"{shp_stem}.shp"
 
     gdf = gpd.read_file(shp_path)
+    orig_index = gdf.index.copy()  # 保存原始 FID（reset_index 前）
     if gdf.crs is not None and str(gdf.crs).upper() != "EPSG:4490":
         gdf = gdf.to_crs("EPSG:4490")
-    gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty].reset_index(drop=True)
+    gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
+    # 对齐 orig_index 到过滤后的行
+    kept_mask = gdf.index
+    orig_index = orig_index[orig_index.isin(kept_mask)]
+    gdf = gdf.reset_index(drop=True)
 
     name_field = _detect_name_field(gdf)
+    id_field, id_values = _detect_id_field(gdf, orig_index)
     gdf["__seq__"] = gdf.index + 1
 
     # 构建高程插值器
@@ -536,7 +558,7 @@ def read_shp_to_4490(shp_dir: str, shp_stem: str, dem_info: dict) -> dict:
     z_offset_text = z_range * 0.03
 
     zones = []
-    for _, row in gdf.iterrows():
+    for i, (_, row) in enumerate(gdf.iterrows()):
         geom = row.geometry
         boundaries = []
 
@@ -577,6 +599,7 @@ def read_shp_to_4490(shp_dir: str, shp_stem: str, dem_info: dict) -> dict:
 
         zones.append({
             "seq": seq,
+            "shp_id": id_values[i] if i < len(id_values) else str(seq),
             "name": name,
             "label": f"{seq}. {name}" if name else f"{seq}",
             "boundaries": boundaries,
@@ -589,6 +612,7 @@ def read_shp_to_4490(shp_dir: str, shp_stem: str, dem_info: dict) -> dict:
     return {
         "zones": zones,
         "name_field": name_field,
+        "id_field": id_field,
         "n_zones": len(zones),
         "fields_meta": extract_field_metadata(gdf),
         "default_display_fields": auto_detect_display_fields(gdf, extract_field_metadata(gdf)),
@@ -811,6 +835,7 @@ def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
     from rasterio.features import rasterize
     from affine import Affine
     from shapely import wkt as shapely_wkt
+    from pyproj import Geod
 
     H, W = dem.shape
 
@@ -820,6 +845,9 @@ def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
     e = Y[1, 0] - Y[0, 0]       # 像元高（度，通常为负——北在上）
     f = Y[0, 0] - e / 2.0        # 上边缘 Y
     transform = Affine(a, 0.0, c, 0.0, e, f)
+
+    # WGS84 椭球测地线计算器
+    geod = Geod(ellps="WGS84")
 
     results = []
 
@@ -847,13 +875,34 @@ def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
                     except Exception:
                         geom = None
 
+        # ---------- 计算椭球面积 ----------
+        area_m2 = 0.0
+        area_km2 = 0.0
+        if geom is not None and not geom.is_empty:
+            try:
+                _area_m2, _ = geod.geometry_area_perimeter(geom)
+                area_m2 = abs(_area_m2)
+                area_km2 = area_m2 / 1_000_000.0
+            except Exception:
+                area_m2 = 0.0
+                area_km2 = 0.0
+
+        # 自动选择面积单位：>= 1 km² 用 km²，否则用 m²
+        if area_km2 >= 1.0:
+            area_display = f"{area_km2:.2f} km²"
+        else:
+            area_display = f"{area_m2:.0f} m²"
+
         # ---------- 无有效几何 → 空统计量 ----------
         if geom is None:
             results.append({
                 "seq": zone["seq"],
+                "shp_id": zone.get("shp_id", str(zone["seq"])),
                 "label": zone.get("label", str(zone["seq"])),
                 "name": zone.get("name"),
                 "pixel_count": 0,
+                "area_m2": 0.0, "area_km2": 0.0, "area_display": "—",
+                "properties": zone.get("properties", {}),
                 "elevation_mean": None, "elevation_min": None,
                 "elevation_max": None, "elevation_std": None,
                 "slope_mean": None, "slope_min": None,
@@ -882,9 +931,12 @@ def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
 
         results.append({
             "seq": zone["seq"],
+            "shp_id": zone.get("shp_id", str(zone["seq"])),
             "label": zone.get("label", str(zone["seq"])),
             "name": zone.get("name"),
             "pixel_count": int(np.sum(mask)),
+            "area_m2": area_m2, "area_km2": area_km2, "area_display": area_display,
+            "properties": zone.get("properties", {}),
             "elevation_mean": float(np.mean(dem_vals)) if has_dem else None,
             "elevation_min": float(np.min(dem_vals)) if has_dem else None,
             "elevation_max": float(np.max(dem_vals)) if has_dem else None,
@@ -1368,12 +1420,17 @@ def process_shp_only(shp_zip_path: Path, session_dir: Path) -> dict:
     shp_path = shp_dir / f"{shp_stem}.shp"
 
     gdf = gpd.read_file(shp_path)
+    orig_index = gdf.index.copy()  # 保存原始 FID
     if gdf.crs is not None and str(gdf.crs).upper() != "EPSG:4490":
         gdf = gdf.to_crs("EPSG:4490")
-    gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty].reset_index(drop=True)
+    gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
+    kept_mask = gdf.index
+    orig_index = orig_index[orig_index.isin(kept_mask)]
+    gdf = gdf.reset_index(drop=True)
     gdf["__seq__"] = gdf.index + 1
 
     name_field = _detect_name_field(gdf)
+    id_field, id_values = _detect_id_field(gdf, orig_index)
     fields_meta = extract_field_metadata(gdf)
     defaults = auto_detect_display_fields(gdf, fields_meta) or config.DEFAULT_DISPLAY_FIELDS
 
@@ -1381,7 +1438,7 @@ def process_shp_only(shp_zip_path: Path, session_dir: Path) -> dict:
     bounds = {"xmin": float("inf"), "xmax": float("-inf"),
               "ymin": float("inf"), "ymax": float("-inf")}
 
-    for _, row in gdf.iterrows():
+    for i, (_, row) in enumerate(gdf.iterrows()):
         geom = row.geometry
         boundaries = []
 
@@ -1422,6 +1479,7 @@ def process_shp_only(shp_zip_path: Path, session_dir: Path) -> dict:
 
         zones.append({
             "seq": seq,
+            "shp_id": id_values[i] if i < len(id_values) else str(seq),
             "name": name,
             "label": f"{seq}. {name}" if name else f"{seq}",
             "boundaries": boundaries,

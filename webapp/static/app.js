@@ -1513,23 +1513,47 @@
   // ====== Simple-DataTables 渲染 ======
 
   function renderDataTable(zones) {
-    // 构建表体 HTML
+    // 收集用户勾选的展示字段
+    var selectedFields = getSelectedFields();
+
+    // ---- 动态构建表头 ----
+    var thead = document.querySelector("#stats-table thead");
+    if (thead) {
+      var headerHtml = "<tr>" +
+        "<th>编号</th>" +
+        "<th>SHP_ID</th>" +
+        "<th>面积</th>";
+      for (var f = 0; f < selectedFields.length; f++) {
+        headerHtml += "<th class='extra-field'>" + selectedFields[f] + "</th>";
+      }
+      headerHtml += "<th>均海拔(m)</th><th>最低(m)</th><th>最高(m)</th><th>σ(m)</th>" +
+        "<th>均坡度(°)</th><th>最低(°)</th><th>最高(°)</th><th>σ(°)</th>" +
+        "</tr>";
+      thead.innerHTML = headerHtml;
+    }
+
+    // ---- 构建表体 ----
     var rows = zones.map(function (z) {
-      return [
-        "<tr>",
-        "<td>" + z.seq + "</td>",
-        "<td>" + (z.name || "—") + "</td>",
-        "<td>" + (z.pixel_count || 0) + "</td>",
-        "<td>" + fmtNum(z.elevation_mean) + "</td>",
-        "<td>" + fmtNum(z.elevation_min) + "</td>",
-        "<td>" + fmtNum(z.elevation_max) + "</td>",
-        "<td>" + fmtNum(z.elevation_std) + "</td>",
-        "<td>" + fmtNum(z.slope_mean) + "</td>",
-        "<td>" + fmtNum(z.slope_min) + "</td>",
-        "<td>" + fmtNum(z.slope_max) + "</td>",
-        "<td>" + fmtNum(z.slope_std) + "</td>",
-        "</tr>",
-      ].join("");
+      var props = z.properties || {};
+      var rowHtml = "<tr>" +
+        "<td>" + z.seq + "</td>" +
+        "<td>" + (z.shp_id || z.seq) + "</td>" +
+        "<td>" + (z.area_display || "—") + "</td>";
+      // 用户勾选字段
+      for (var f2 = 0; f2 < selectedFields.length; f2++) {
+        rowHtml += "<td class='extra-field'>" + (props[selectedFields[f2]] || "—") + "</td>";
+      }
+      rowHtml +=
+        "<td>" + fmtNum(z.elevation_mean) + "</td>" +
+        "<td>" + fmtNum(z.elevation_min) + "</td>" +
+        "<td>" + fmtNum(z.elevation_max) + "</td>" +
+        "<td>" + fmtNum(z.elevation_std) + "</td>" +
+        "<td>" + fmtNum(z.slope_mean) + "</td>" +
+        "<td>" + fmtNum(z.slope_min) + "</td>" +
+        "<td>" + fmtNum(z.slope_max) + "</td>" +
+        "<td>" + fmtNum(z.slope_std) + "</td>" +
+        "</tr>";
+      return rowHtml;
     });
 
     var tbody = document.querySelector("#stats-table tbody");
@@ -1640,6 +1664,102 @@
       bargap: 0.15,
     }, { responsive: true, displayModeBar: false });
   }
+
+  // ====== 统计图放大 / 下载 ======
+
+  /** 将 chartEl 中的 Plotly 图复制到放大弹窗 */
+  function openChartZoom(chartElId) {
+    var chartEl = document.getElementById(chartElId);
+    if (!chartEl) return;
+    var zoomBody = $("chart-zoom-body");
+    if (!zoomBody) return;
+
+    // 获取原始 plot 数据
+    var origData = chartEl.data;
+    var origLayout = chartEl.layout;
+    if (!origData || !origLayout) return;
+
+    var modal = $("chart-zoom-modal");
+    var titleEl = $("chart-zoom-title");
+    if (titleEl) {
+      titleEl.textContent = (origLayout.title && origLayout.title.text) || "统计图";
+    }
+    modal.classList.remove("hidden");
+
+    // 深拷贝 layout 并调整为放大尺寸
+    var bigLayout = JSON.parse(JSON.stringify(origLayout));
+    bigLayout.height = 550;
+    bigLayout.margin = { t: 40, b: 90, l: 56, r: 24 };
+    if (bigLayout.xaxis) {
+      bigLayout.xaxis.tickfont = { size: 12, color: "#718096" };
+      if (bigLayout.xaxis.title) bigLayout.xaxis.title.font = { size: 13 };
+    }
+    if (bigLayout.yaxis) {
+      bigLayout.yaxis.tickfont = { size: 12, color: "#718096" };
+      if (bigLayout.yaxis.title) bigLayout.yaxis.title.font = { size: 13 };
+    }
+
+    Plotly.newPlot(zoomBody, origData, bigLayout, {
+      responsive: true,
+      displayModeBar: true,
+      modeBarButtonsToRemove: ["lasso2d", "select2d"],
+    });
+  }
+
+  function closeChartZoom() {
+    var modal = $("chart-zoom-modal");
+    modal.classList.add("hidden");
+    var zoomBody = $("chart-zoom-body");
+    if (zoomBody) Plotly.purge(zoomBody);
+  }
+
+  /** 下载统计图为 PNG */
+  function downloadChartPNG(chartElId) {
+    var chartEl = document.getElementById(chartElId);
+    if (!chartEl) return;
+    Plotly.downloadImage(chartEl, {
+      format: "png",
+      width: 1200,
+      height: 800,
+      filename: chartElId.replace("stats-", ""),
+    });
+  }
+
+  // 事件委托：图表操作按钮
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".chart-zoom-btn");
+    if (btn) {
+      e.preventDefault();
+      openChartZoom(btn.getAttribute("data-chart"));
+      return;
+    }
+    btn = e.target.closest(".chart-dl-btn");
+    if (btn) {
+      e.preventDefault();
+      downloadChartPNG(btn.getAttribute("data-chart"));
+      return;
+    }
+  });
+
+  // 放大弹窗关闭
+  var chartZoomClose = $("chart-zoom-close");
+  if (chartZoomClose) {
+    chartZoomClose.addEventListener("click", closeChartZoom);
+  }
+  var chartZoomOverlay = $("chart-zoom-overlay");
+  if (chartZoomOverlay) {
+    chartZoomOverlay.addEventListener("click", closeChartZoom);
+  }
+
+  // ESC 关闭
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+      var modal = $("chart-zoom-modal");
+      if (modal && !modal.classList.contains("hidden")) {
+        closeChartZoom();
+      }
+    }
+  });
 
   // ======================== 专题着色 ========================
 

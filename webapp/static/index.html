@@ -409,7 +409,7 @@
             <table id="stats-table">
               <thead>
                 <tr>
-                  <th>编号</th><th>名称</th><th>面积(px)</th>
+                  <th>编号</th><th>SHP_ID</th><th>面积</th>
                   <th>均海拔(m)</th><th>最低(m)</th><th>最高(m)</th><th>σ(m)</th>
                   <th>均坡度(°)</th><th>最低(°)</th><th>最高(°)</th><th>σ(°)</th>
                 </tr>
@@ -430,6 +430,10 @@
                 </table>
                 <div id="stats-slope-chart" class="pivot-chart"></div>
               </div>
+              <div class="chart-actions">
+                <button class="chart-action-btn chart-zoom-btn" data-chart="stats-slope-chart" title="放大查看">🔍</button>
+                <button class="chart-action-btn chart-dl-btn" data-chart="stats-slope-chart" title="下载 PNG">⬇</button>
+              </div>
             </div>
             <!-- 海拔分组 -->
             <div class="pivot-block">
@@ -441,6 +445,10 @@
                   <tbody id="stats-elev-pivot-body"></tbody>
                 </table>
                 <div id="stats-elev-chart" class="pivot-chart"></div>
+              </div>
+              <div class="chart-actions">
+                <button class="chart-action-btn chart-zoom-btn" data-chart="stats-elev-chart" title="放大查看">🔍</button>
+                <button class="chart-action-btn chart-dl-btn" data-chart="stats-elev-chart" title="下载 PNG">⬇</button>
               </div>
             </div>
           </div>
@@ -457,6 +465,18 @@
     </section>
 
   </main>
+
+  <!-- ====== 统计图放大弹窗 ====== -->
+  <div id="chart-zoom-modal" class="hidden">
+    <div id="chart-zoom-overlay"></div>
+    <div id="chart-zoom-dialog">
+      <div id="chart-zoom-header">
+        <span id="chart-zoom-title"></span>
+        <button id="chart-zoom-close" title="关闭 (Esc)">✕</button>
+      </div>
+      <div id="chart-zoom-body"></div>
+    </div>
+  </div>
 
   <!-- ====== 加载状态 ====== -->
   <div id="loading-overlay" class="hidden">
