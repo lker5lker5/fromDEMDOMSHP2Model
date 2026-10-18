@@ -482,6 +482,7 @@ async def zone_stats(body: ZoneStatsRequest):
         "elevation_pivot": elev_pivot,
         "slope_bin": body.slope_bin,
         "elevation_bin": body.elevation_bin,
+        "n_zones": len(zones),   # SHP 图斑总数，供前端核对
     }
 
 

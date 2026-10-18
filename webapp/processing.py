@@ -813,6 +813,17 @@ def compute_zone_statistics(dem: np.ndarray, slope: np.ndarray,
     for zone in zones:
         boundaries = zone.get("boundaries", [])
         if not boundaries:
+            # 无边界（如 Point 类型几何），仍然录入，但统计量为空
+            results.append({
+                "seq": zone["seq"],
+                "label": zone.get("label", str(zone["seq"])),
+                "name": zone.get("name"),
+                "pixel_count": 0,
+                "elevation_mean": None, "elevation_min": None,
+                "elevation_max": None, "elevation_std": None,
+                "slope_mean": None, "slope_min": None,
+                "slope_max": None, "slope_std": None,
+            })
             continue
         # 取第一个 ring（外边界）
         b = boundaries[0]
@@ -856,19 +867,36 @@ def compute_zone_pivot(zone_stats: list, field: str, bin_width: float) -> dict:
         bin_width: 分组间隔
 
     返回:
-        {"bins": [...], "counts": [...], "table": [{range, count, zones}]}
+        {
+            "bins": [...], "counts": [...],
+            "table": [{range, count, zones}],
+            "n_total": int,          # 参与统计的 zone 总数
+            "n_with_data": int,      # 有有效值的 zone 数
+            "n_excluded": int,        # 因缺失值被排除的 zone 数
+        }
     """
     mean_key = field + "_mean"
+    n_total = len(zone_stats)
+
     values = []
     labels = []
+    excluded_labels = []
     for z in zone_stats:
         v = z.get(mean_key)
         if v is not None:
             values.append(v)
             labels.append(z["label"])
+        else:
+            excluded_labels.append(z.get("label", str(z.get("seq", ""))))
+
+    n_with_data = len(values)
+    n_excluded = len(excluded_labels)
 
     if not values:
-        return {"bins": [], "counts": [], "table": []}
+        return {
+            "bins": [], "counts": [], "table": [],
+            "n_total": n_total, "n_with_data": 0, "n_excluded": n_excluded,
+        }
 
     values = np.array(values)
     labels = np.array(labels)
@@ -893,10 +921,22 @@ def compute_zone_pivot(zone_stats: list, field: str, bin_width: float) -> dict:
             "zones": labels[mask].tolist(),
         })
 
+    # 追加"无数据"行（被排除的 zone）
+    if n_excluded > 0:
+        table.append({
+            "range": "无数据",
+            "count": n_excluded,
+            "zones": excluded_labels,
+        })
+        counts.append(n_excluded)
+
     return {
         "bins": bins.tolist(),
         "counts": counts,
         "table": table,
+        "n_total": n_total,
+        "n_with_data": n_with_data,
+        "n_excluded": n_excluded,
     }
 
 

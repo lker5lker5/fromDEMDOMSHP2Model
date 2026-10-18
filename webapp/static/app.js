@@ -1487,6 +1487,8 @@
         throw new Error(errData.detail || "统计计算失败");
       }
       var stats = await resp.json();
+      // 记录图斑总数，供前端展示（与"区数量"诊断值一致）
+      state.statsNZones = stats.n_zones;
       renderDataTable(stats.zones);
       renderPivotCharts(stats);
       hideLoading();
@@ -1577,11 +1579,22 @@
   }
 
   function renderPivotBlock(prefix, pivot, binWidth, unit, palette) {
-    // 总计数标签
+    // 总计数标签 — 优先使用后端返回的 n_total（包含被排除的 zone），
+    // 回退为 sum(counts)（兼容旧版后端）
     var totalEl = $(prefix === "slope" ? "stats-slope-total" : "stats-elev-total");
     if (totalEl) {
-      var total = (pivot.table || []).reduce(function (s, r) { return s + r.count; }, 0);
-      totalEl.textContent = "共 " + total + " 个 Zone";
+      var total = (pivot.n_total != null)
+        ? pivot.n_total
+        : (pivot.table || []).reduce(function (s, r) { return s + r.count; }, 0);
+      var withData = pivot.n_with_data;
+      var excluded = pivot.n_excluded;
+      if (excluded != null && excluded > 0) {
+        totalEl.textContent = "共 " + total + " 个 Zone（其中 " + excluded + " 个无数据）";
+      } else if (withData != null) {
+        totalEl.textContent = "共 " + total + " 个 Zone";
+      } else {
+        totalEl.textContent = "共 " + total + " 个 Zone";
+      }
     }
 
     // 透视表
