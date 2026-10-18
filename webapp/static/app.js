@@ -1637,6 +1637,7 @@
   var _zoneColorData = null;  // {zone_colors: [...], legend: [...], field_type}
 
   async function applyZoneColors(fieldName) {
+    console.log('[color] applyZoneColors called, fieldName:', fieldName);
     if (!state.sessionId) return;
     try {
       var resp = await fetch("/api/zone-colors", {
@@ -1650,6 +1651,11 @@
       });
       if (!resp.ok) throw new Error((await resp.json()).detail);
       var data = await resp.json();
+      console.log('[color] API returned: field_type=', data.field_type, 'field_name=', data.field_name,
+        'zone_colors count=', data.zone_colors.length, 'legend count=', data.legend ? data.legend.length : 0);
+      if (data.zone_colors.length > 0) {
+        console.log('[color] first zone_color:', JSON.stringify(data.zone_colors[0]));
+      }
       _zoneColorData = data;
 
       // 更新 Cesium 多边形颜色（安全调用，失败不影响后续）
