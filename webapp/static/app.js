@@ -1607,15 +1607,20 @@
       responsive: true, displayModeBar: false,
     });
 
-    // Plotly.newPlot 会清空容器 innerHTML，需在渲染后注入操作按钮
-    var existingActions = chartEl.querySelector(".chart-actions");
-    if (existingActions) existingActions.remove();
-    var actionsDiv = document.createElement("div");
-    actionsDiv.className = "chart-actions";
-    actionsDiv.innerHTML =
-      '<button class="chart-action-btn chart-zoom-btn" data-chart="' + chartId + '" title="放大查看">🔍</button>' +
-      '<button class="chart-action-btn chart-dl-btn" data-chart="' + chartId + '" title="下载 PNG">⬇</button>';
-    chartEl.appendChild(actionsDiv);
+    // Plotly.newPlot 会清空 .pivot-chart 的 innerHTML。
+    // 按钮注入到外层 .pivot-chart-wrap 中，与 chart 容器平级，
+    // 通过 position:absolute 叠加在图表右下角，完全不受 Plotly 影响。
+    var wrap = chartEl.parentElement;
+    if (wrap && wrap.classList.contains("pivot-chart-wrap")) {
+      var existingActions = wrap.querySelector(".chart-actions");
+      if (existingActions) existingActions.remove();
+      var actionsDiv = document.createElement("div");
+      actionsDiv.className = "chart-actions";
+      actionsDiv.innerHTML =
+        '<button class="chart-action-btn chart-zoom-btn" data-chart="' + chartId + '" title="放大查看">🔍</button>' +
+        '<button class="chart-action-btn chart-dl-btn" data-chart="' + chartId + '" title="下载 PNG">⬇</button>';
+      wrap.appendChild(actionsDiv);
+    }
   }
 
   // ====== 统计图放大 / 下载 ======

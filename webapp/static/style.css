@@ -1416,27 +1416,32 @@ html, body {
 }
 .pivot-table tbody tr:nth-child(even) { background: #fafbfc; }
 .pivot-table tbody tr:hover { background: #ebf4ff; }
-.pivot-chart {
+.pivot-chart-wrap {
   flex: 1; min-width: 300px; min-height: 260px;
-  position: relative;       /* 为按钮叠加层提供定位上下文 */
+  position: relative;       /* 按钮定位上下文 */
+}
+.pivot-chart-wrap .pivot-chart {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
 }
 
-/* ---- 图表操作按钮（右上角叠加） ---- */
+/* ---- 图表操作按钮（右下角悬浮叠加） ---- */
 .chart-actions {
-  position: absolute; top: 6px; right: 6px; z-index: 5;
+  position: absolute; bottom: 8px; right: 8px; z-index: 10;
   display: flex; gap: 4px;
 }
 .chart-action-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border-radius: 5px;
+  width: 32px; height: 32px; border-radius: 6px;
   border: 1px solid #cbd5e0;
-  background: rgba(255,255,255,0.92);
-  cursor: pointer; font-size: 13px; color: #4a5568;
+  background: rgba(255,255,255,0.95);
+  cursor: pointer; font-size: 15px; color: #2d3748;
   transition: all 0.15s;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+  pointer-events: auto;
 }
 .chart-action-btn:hover {
-  background: #edf2f7; border-color: #a0aec0; color: #2d3748;
+  background: #edf2f7; border-color: #a0aec0; color: #1a202c;
 }
 
 /* ---- 统计图放大弹窗 ---- */
