@@ -1699,12 +1699,25 @@
 
   /** 更新 Plotly 边界线颜色 */
   function updatePlotlyColors(zoneColors) {
-    if (!plotlyDiv || !plotlyDiv._fullLayout) return;
+    console.log('[color] updatePlotlyColors called, zoneColors count:', zoneColors.length);
+    if (!plotlyDiv) { console.warn('[color] plotlyDiv is null'); return; }
+    if (!plotlyDiv._fullLayout) { console.warn('[color] plotlyDiv._fullLayout is null'); return; }
+
     var colorMap = {};
     zoneColors.forEach(function (zc) { colorMap[zc.seq] = zc.color; });
+    console.log('[color] colorMap keys:', Object.keys(colorMap).slice(0, 5), '... total:', Object.keys(colorMap).length);
 
     var traces = plotlyDiv.data;
-    if (!traces) return;
+    if (!traces) { console.warn('[color] plotlyDiv.data is null'); return; }
+    console.log('[color] total traces:', traces.length);
+
+    // 列出前几个 trace 的 name 用于调试
+    var sampleNames = [];
+    for (var di = 0; di < Math.min(traces.length, 10); di++) {
+      sampleNames.push(traces[di].name);
+    }
+    console.log('[color] sample trace names:', sampleNames);
+
     var traceIndices = [];
     var traceColors = [];
 
@@ -1720,13 +1733,19 @@
       }
     });
 
+    console.log('[color] matched traceIndices count:', traceIndices.length);
     if (traceIndices.length > 0) {
-      // 判断是否使用透明颜色（重置/统一颜色场景）
+      console.log('[color] first few traceIndices:', traceIndices.slice(0, 5));
+      console.log('[color] first few traceColors:', traceColors.slice(0, 5));
       var isTransparent = /rgba\(\s*\d+,\s*\d+,\s*\d+,\s*0\s*\)/.test(traceColors[0]);
+      console.log('[color] isTransparent:', isTransparent, 'width:', isTransparent ? 0 : 2.2);
       Plotly.restyle(plotlyDiv, {
         "line.color": traceColors,
         "line.width": isTransparent ? 0 : 2.2,
       }, traceIndices);
+      console.log('[color] Plotly.restyle() done');
+    } else {
+      console.warn('[color] No traces matched zone_ pattern!');
     }
   }
 
