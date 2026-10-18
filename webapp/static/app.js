@@ -1509,6 +1509,13 @@
           noResults: "无匹配结果",
         },
       });
+      // Simple-DataTables 会在 table 上设置 inline width:100%，
+      // 这会阻止表格超出容器宽度，使水平滚动失效。
+      // 移除该 inline 样式，由 CSS min-width 控制表格宽度。
+      var tableEl = document.querySelector("#stats-table");
+      if (tableEl) {
+        tableEl.style.removeProperty("width");
+      }
     }
   }
 

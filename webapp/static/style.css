@@ -1301,7 +1301,8 @@ html, body {
 /* ---- 左侧：DataTable ---- */
 #stats-left {
   flex: 0 0 430px;
-  overflow: auto;          /* 上下 + 左右均可滚动 */
+  overflow-y: auto;         /* 垂直滚动由外层处理 */
+  overflow-x: hidden;       /* 水平滚动由 datatable-container 处理 */
   padding: 10px;
   background: #fff;
   border-right: 1px solid #e2e5ea;
@@ -1309,8 +1310,13 @@ html, body {
 /* Simple-DataTables 覆盖：匹配项目风格 */
 #stats-left .datatable-wrapper {
   border: none; border-radius: 6px;
-  overflow: visible !important;  /* 由 #stats-left 统一管理滚动 */
+  overflow: visible;        /* 不做裁剪，交给容器 */
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+/* Simple-DataTables 内部容器：承载水平滚动 */
+#stats-left .datatable-container {
+  overflow-x: auto;
+  overflow-y: visible;
 }
 /* 确保表格宽度超出容器时可以被水平滚动 */
 #stats-left .datatable-table {
