@@ -1592,7 +1592,7 @@
     var chartLayout = {
       title: { text: titleText, font: { size: 13, color: "#2d3748" } },
       xaxis: { title: { text: xTitle, font: { size: 11 } }, tickangle: -45, tickfont: { size: 10, color: "#718096" } },
-      yaxis: { title: { text: "Zone 数", font: { size: 11 } }, tickfont: { size: 10, color: "#718096" }, dtick: 1 },
+      yaxis: { title: { text: "Zone 数", font: { size: 11 } }, tickfont: { size: 10, color: "#718096" }, nticks: 6, tickformat: "d" },
       margin: { t: 36, b: 74, l: 48, r: 16 },
       height: 260,
       paper_bgcolor: "rgba(0,0,0,0)",
