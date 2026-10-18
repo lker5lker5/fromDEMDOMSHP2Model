@@ -1114,18 +1114,14 @@
         // 全量数据: 3D 渲染
         log('🏔 开始 3D 渲染... (' + (data.zones || []).length + ' 个区划)', 'step');
         showLoading("正在渲染 3D 视图...");
-        var renderTimer = startProcessingTimer('正在渲染 3D 视图');
         try {
           await doRender();
-          if (renderTimer) renderTimer.updateText('✅ 已完成 3D 渲染');
           switchTo3DView();
           setStatus("✅ 数据已加载，可调整参数后点「应用」刷新" + (timeStr ? '  ' + timeStr : ''), "success");
         } catch (renderErr) {
           setStatus("❌ 渲染失败", "error");
         } finally {
-          if (renderTimer) renderTimer.stop();
-          // 延迟 800ms 隐藏遮罩，确保用户能看清"完成"消息
-          setTimeout(hideLoading, 800);
+          hideLoading();
         }
         $("apply-btn").disabled = false;
         $("reset-btn").disabled = false;
@@ -1637,14 +1633,15 @@
     }
 
     // 柱状图
-    var chartEl = $(prefix === "slope" ? "stats-slope-chart" : "stats-elev-chart");
+    var chartId = prefix === "slope" ? "stats-slope-chart" : "stats-elev-chart";
+    var chartEl = $(chartId);
     if (!chartEl) return;
     var labels = (pivot.table || []).map(function (r) { return r.range; });
     var counts = (pivot.table || []).map(function (r) { return r.count; });
     var titleText = (prefix === "slope" ? "坡度" : "海拔") + "分布（" + binWidth + " " + unit + "/组）";
     var xTitle = prefix === "slope" ? "坡度 (°)" : "海拔 (m)";
 
-    Plotly.newPlot(chartEl, [{
+    var chartData = [{
       type: "bar",
       x: labels,
       y: counts,
@@ -1653,7 +1650,8 @@
         line: { color: palette.barEdge, width: 0.5 },
       },
       hovertemplate: "%{x}<br>Zone 数: %{y}<extra></extra>",
-    }], {
+    }];
+    var chartLayout = {
       title: { text: titleText, font: { size: 13, color: "#2d3748" } },
       xaxis: { title: { text: xTitle, font: { size: 11 } }, tickangle: -45, tickfont: { size: 10, color: "#718096" } },
       yaxis: { title: { text: "Zone 数", font: { size: 11 } }, tickfont: { size: 10, color: "#718096" }, dtick: 1 },
@@ -1662,22 +1660,30 @@
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
       bargap: 0.15,
-    }, { responsive: true, displayModeBar: false });
+    };
+
+    // 缓存 chart 数据供放大/下载使用
+    _chartCache[chartId] = { data: chartData, layout: chartLayout };
+
+    Plotly.newPlot(chartEl, chartData, chartLayout, {
+      responsive: true, displayModeBar: false,
+    });
   }
 
   // ====== 统计图放大 / 下载 ======
 
-  /** 将 chartEl 中的 Plotly 图复制到放大弹窗 */
+  /** 统计图数据缓存 { chartElId: { data, layout } } */
+  var _chartCache = {};
+
+  /** 将缓存的 Plotly 图复制到放大弹窗 */
   function openChartZoom(chartElId) {
-    var chartEl = document.getElementById(chartElId);
-    if (!chartEl) return;
+    var cached = _chartCache[chartElId];
+    if (!cached) return;
     var zoomBody = $("chart-zoom-body");
     if (!zoomBody) return;
 
-    // 获取原始 plot 数据
-    var origData = chartEl.data;
-    var origLayout = chartEl.layout;
-    if (!origData || !origLayout) return;
+    var origData = cached.data;
+    var origLayout = cached.layout;
 
     var modal = $("chart-zoom-modal");
     var titleEl = $("chart-zoom-title");
@@ -1713,8 +1719,11 @@
     if (zoomBody) Plotly.purge(zoomBody);
   }
 
-  /** 下载统计图为 PNG */
+  /** 下载统计图为 PNG（从缓存的 chart 数据重新渲染后导出） */
   function downloadChartPNG(chartElId) {
+    var cached = _chartCache[chartElId];
+    if (!cached) return;
+    // 用隐藏容器导出 PNG — Plotly.downloadImage 需要已渲染的 div
     var chartEl = document.getElementById(chartElId);
     if (!chartEl) return;
     Plotly.downloadImage(chartEl, {
