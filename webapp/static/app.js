@@ -1700,32 +1700,34 @@
   /** 更新 Plotly 边界线颜色 */
   function updatePlotlyColors(zoneColors) {
     if (!plotlyDiv || !plotlyDiv._fullLayout) return;
-    // 建立 zone → color 索引
     var colorMap = {};
     zoneColors.forEach(function (zc) { colorMap[zc.seq] = zc.color; });
 
-    // 遍历已有 traces，按 name 匹配 zone_seq
     var traces = plotlyDiv.data;
     if (!traces) return;
-    var totalTraces = traces.length;
-    // Plotly.restyle("line.color", ...) 期望每个 trace 一个元素
-    // 的数组，未匹配的 trace 保持 null（不变）
-    var colors = new Array(totalTraces).fill(null);
+    var traceIndices = [];
+    var traceColors = [];   // Plotly 要求每个值包裹在自己的数组中
+
     traces.forEach(function (trace, idx) {
       if (!trace.name) return;
       var m = trace.name.match(/^zone_(\d+)_/);
       if (m) {
         var seq = parseInt(m[1]);
         if (colorMap[seq] != null) {
-          colors[idx] = colorMap[seq];
+          traceIndices.push(idx);
+          traceColors.push([colorMap[seq]]);
         }
       }
     });
 
-    // 检查是否有任何颜色需要更新
-    var hasChange = colors.some(function (c) { return c !== null; });
-    if (hasChange) {
-      Plotly.restyle(plotlyDiv, "line.color", [colors]);
+    if (traceIndices.length > 0) {
+      // 判断是否使用透明颜色（重置/统一颜色场景）
+      var isTransparent = traceColors.length > 0 &&
+        /rgba\(\s*\d+,\s*\d+,\s*\d+,\s*0\s*\)/.test(traceColors[0][0]);
+      Plotly.restyle(plotlyDiv, {
+        "line.color": traceColors,
+        "line.width": isTransparent ? 0 : 2.2,
+      }, traceIndices);
     }
   }
 
