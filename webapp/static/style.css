@@ -1428,21 +1428,22 @@ html, body {
 .pivot-table tbody tr:hover { background: #ebf4ff; }
 .pivot-chart {
   flex: 1; min-width: 300px; min-height: 260px;
+  position: relative;       /* 为按钮叠加层提供定位上下文 */
 }
 
-/* ---- 图表操作按钮 ---- */
+/* ---- 图表操作按钮（右上角叠加） ---- */
 .chart-actions {
-  display: flex; gap: 6px; justify-content: flex-end;
-  margin-top: 8px; padding-top: 8px;
-  border-top: 1px solid #edf2f7;
+  position: absolute; top: 6px; right: 6px; z-index: 5;
+  display: flex; gap: 4px;
 }
 .chart-action-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px;
-  border: 1px solid #cbd5e0; border-radius: 6px;
-  background: #fff; cursor: pointer;
-  font-size: 14px; color: #4a5568;
+  width: 28px; height: 28px; border-radius: 5px;
+  border: 1px solid #cbd5e0;
+  background: rgba(255,255,255,0.92);
+  cursor: pointer; font-size: 13px; color: #4a5568;
   transition: all 0.15s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 .chart-action-btn:hover {
   background: #edf2f7; border-color: #a0aec0; color: #2d3748;
